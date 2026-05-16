@@ -1,0 +1,13 @@
+node_modules
+.env
+cookies.json
+*.log
+
+# Old JSON file data — once you've migrated to MongoDB you can git-rm these
+# (commented because some folks still want to keep them as backup)
+# clients.json
+# posts.json
+# prompts.json
+# scheduled.json
+# calendar.json
+# images.json

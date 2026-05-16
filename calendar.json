@@ -1,0 +1,778 @@
+[
+  {
+    "client": "Manofox",
+    "calendar": [
+      {
+        "date": "2026-05-15",
+        "event": "Content Alert",
+        "topic": "Benefits of a Well-Designed Website",
+        "goal": "Encourage businesses to prioritize website development"
+      },
+      {
+        "date": "2026-05-16",
+        "event": "Social Media Post",
+        "topic": "Importance of Consistent Branding Across Social Media",
+        "goal": "Highlight the importance of cohesive branding"
+      },
+      {
+        "date": "2026-05-17",
+        "event": "Blog Post",
+        "topic": "A Beginner's Guide to GMB Management",
+        "goal": "Educate businesses on GMB management best practices"
+      },
+      {
+        "date": "2026-05-18",
+        "event": "Infographic Share",
+        "topic": "Statistics on E-commerce Website Development",
+        "goal": "Grab the attention of businesses with compelling stats"
+      },
+      {
+        "date": "2026-05-19",
+        "event": "Email Newsletter",
+        "topic": "New Service Launch: Ads Management",
+        "goal": "Announce the launch of Manofox's Ads Management service"
+      },
+      {
+        "date": "2026-05-20",
+        "event": "Social Media Story",
+        "topic": "Behind-the-Scenes: Manofox Team",
+        "goal": "Humanize the Manofox brand"
+      },
+      {
+        "date": "2026-05-21",
+        "event": "Live Webinar",
+        "topic": "Maximizing Social Media ROI",
+        "goal": "Educate businesses on maximizing social media ROI"
+      },
+      {
+        "date": "2026-05-22",
+        "event": "Testimonial Share",
+        "topic": "Client Success Story: [Client Name]",
+        "goal": "Highlight the value of Manofox's services through testimonials"
+      },
+      {
+        "date": "2026-05-23",
+        "event": "Email Course Launch",
+        "topic": "Digital Marketing Fundamentals",
+        "goal": "Offer businesses a free resource on digital marketing fundamentals"
+      },
+      {
+        "date": "2026-05-24",
+        "event": "Social Media Post",
+        "topic": "The Importance of Website Speed Optimization",
+        "goal": "Educate businesses on the importance of website speed"
+      },
+      {
+        "date": "2026-05-25",
+        "event": "Blog Post",
+        "topic": "A Guide to Measuring Website ROI",
+        "goal": "Educate businesses on measuring website ROI"
+      },
+      {
+        "date": "2026-05-26",
+        "event": "Infographic Share",
+        "topic": "Statistics on Social Media Efficacy",
+        "goal": "Grab the attention of businesses with compelling stats"
+      },
+      {
+        "date": "2026-05-27",
+        "event": "Email Newsletter",
+        "topic": "Upcoming Event: [Event Name]",
+        "goal": "Promote an upcoming event hosted by Manofox"
+      },
+      {
+        "date": "2026-05-28",
+        "event": "Social Media Story",
+        "topic": "Tips for Effective GMB Optimization",
+        "goal": "Provide valuable tips to businesses on GMB optimization"
+      },
+      {
+        "date": "2026-05-29",
+        "event": "Live Webinar",
+        "topic": "Maximizing Website Conversions",
+        "goal": "Educate businesses on maximizing website conversions"
+      },
+      {
+        "date": "2026-05-30",
+        "event": "Testimonial Share",
+        "topic": "Client Success Story: [Client Name]",
+        "goal": "Highlight the value of Manofox's services through testimonials"
+      },
+      {
+        "date": "2026-05-31",
+        "event": "Blog Post",
+        "topic": "The Impact of Google Algorithm Updates on Your Business",
+        "goal": "Educate businesses on the impact of Google algorithm updates"
+      },
+      {
+        "date": "2026-06-01",
+        "event": "Email Course Launch",
+        "topic": "Advanced Digital Marketing Strategies",
+        "goal": "Offer businesses a free resource on advanced digital marketing strategies"
+      },
+      {
+        "date": "2026-06-02",
+        "event": "Social Media Post",
+        "topic": "Best Practices for Social Media Content Creation",
+        "goal": "Provide valuable insights to businesses on social media content creation"
+      },
+      {
+        "date": "2026-06-03",
+        "event": "Infographic Share",
+        "topic": "Statistics on E-commerce Website Sales",
+        "goal": "Grab the attention of businesses with compelling stats"
+      },
+      {
+        "date": "2026-06-04",
+        "event": "Email Newsletter",
+        "topic": "New Resource Release: [Resource Name]",
+        "goal": "Announce the release of a new resource by Manofox"
+      },
+      {
+        "date": "2026-06-05",
+        "event": "Social Media Story",
+        "topic": "Case Study: [Client Name]",
+        "goal": "Highlight the success of Manofox's services through case studies"
+      },
+      {
+        "date": "2026-06-06",
+        "event": "Live Webinar",
+        "topic": "Maximizing Social Media Engagement",
+        "goal": "Educate businesses on maximizing social media engagement"
+      },
+      {
+        "date": "2026-06-07",
+        "event": "Testimonial Share",
+        "topic": "Client Success Story: [Client Name]",
+        "goal": "Highlight the value of Manofox's services through testimonials"
+      },
+      {
+        "date": "2026-06-08",
+        "event": "Email Course Launch",
+        "topic": "Digital Marketing Analytics for Beginners",
+        "goal": "Offer businesses a free resource on digital marketing analytics"
+      },
+      {
+        "date": "2026-06-09",
+        "event": "Social Media Post",
+        "topic": "Tips for Effective Social Media Advertising",
+        "goal": "Provide valuable insights to businesses on social media advertising"
+      },
+      {
+        "date": "2026-06-10",
+        "event": "Infographic Share",
+        "topic": "Statistics on Website Conversion Rates",
+        "goal": "Grab the attention of businesses with compelling stats"
+      },
+      {
+        "date": "2026-06-11",
+        "event": "Email Newsletter",
+        "topic": "Webinar Recap: [Webinar Title]",
+        "goal": "Summarize the key takeaways from a previous webinar"
+      },
+      {
+        "date": "2026-06-12",
+        "event": "Social Media Story",
+        "topic": "Behind-the-Scenes: Manofox Team",
+        "goal": "Humanize the Manofox brand"
+      },
+      {
+        "date": "2026-06-13",
+        "event": "Live Webinar",
+        "topic": "Maximizing Website SEO",
+        "goal": "Educate businesses on maximizing website SEO"
+      },
+      {
+        "date": "2026-06-14",
+        "event": "Testimonial Share",
+        "topic": "Client Success Story: [Client Name]",
+        "goal": "Highlight the value of Manofox's services through testimonials"
+      },
+      {
+        "date": "2026-06-15",
+        "event": "Email Course Launch",
+        "topic": "Advanced Website Development Strategies",
+        "goal": "Offer businesses a free resource on advanced website development strategies"
+      }
+    ]
+  },
+  {
+    "client": "Manofox",
+    "calendar": [
+      {
+        "date": "2026-05-15",
+        "event": "New Month Kick-Off",
+        "topic": "Boosting Your Business with Consistency",
+        "goal": "Welcome to Manofox, and start your month with a consistent digital marketing strategy."
+      },
+      {
+        "date": "2026-05-16",
+        "event": "Blog Post",
+        "topic": "Website Development: Why It Matters for Business",
+        "goal": "Help businesses understand the importance of website development and how it impacts their sales."
+      },
+      {
+        "date": "2026-05-17",
+        "event": "Social Media Post",
+        "topic": "5 Steps to Create Engaging Social Media Content",
+        "goal": "Educate businesses on how to create engaging social media content and why it's essential."
+      },
+      {
+        "date": "2026-05-18",
+        "event": "Email Marketing",
+        "topic": "How to Leverage Email Marketing for Better ROI",
+        "goal": "Provide tips and tricks on how to use email marketing for better return on investment."
+      },
+      {
+        "date": "2026-05-19",
+        "event": "Facebook Live",
+        "topic": "Maximizing Your Google My Business for Local SEO",
+        "goal": "Share expert advice on how to maximize Google My Business listings for better local search engine optimization."
+      },
+      {
+        "date": "2026-05-20",
+        "event": "Case Study",
+        "topic": "Success Story: Local Business Grows 30% through Our Social Media Management",
+        "goal": "Share a real-life example of how Manofox helped a local business grow through social media marketing."
+      },
+      {
+        "date": "2026-05-21",
+        "event": "Webinar",
+        "topic": "Digital Marketing for SMEs: Tips and Strategies for Growth",
+        "goal": "Host a webinar that offers actionable tips and strategies for small and medium-sized enterprises to grow their digital presence."
+      },
+      {
+        "date": "2026-05-22",
+        "event": "Social Media Post",
+        "topic": "The Importance of Consistency in Advertising for Business",
+        "goal": "Highlight the importance of maintaining a consistent advertisement schedule for businesses."
+      },
+      {
+        "date": "2026-05-23",
+        "event": "Blog Post",
+        "topic": "Why You Need a Professional Website in Today's Digital Landscape",
+        "goal": "Explain the benefits of having a professional website and how it impacts a business's credibility."
+      },
+      {
+        "date": "2026-05-24",
+        "event": "Email Marketing",
+        "topic": "Maximizing Ad Conversion Rates with Targeted Audience Segmentation",
+        "goal": "Share expert advice on how to segment your target audience for better ad conversion rates."
+      },
+      {
+        "date": "2026-05-25",
+        "event": "Google Ads Tutorial",
+        "topic": "How to Set Up Google Ads for Your Business",
+        "goal": "Provide step-by-step instructions on how to set up Google Ads for businesses."
+      },
+      {
+        "date": "2026-05-26",
+        "event": "Social Media Post",
+        "topic": "The Benefits of Local SEO for Businesses",
+        "goal": "Highlight the benefits of local SEO for businesses and provide tips on how to improve their local search engine rankings."
+      },
+      {
+        "date": "2026-05-27",
+        "event": "Blog Post",
+        "topic": "Why Social Media Management Is a Must for Every Business",
+        "goal": "Explain the importance of social media management for businesses and provide tips on how to manage their social media presence effectively."
+      },
+      {
+        "date": "2026-05-28",
+        "event": "Case Study",
+        "topic": "Success Story: E-commerce Business Sees 25% Increase in Sales through Our Email Marketing Services",
+        "goal": "Share a real-life example of how Manofox helped an e-commerce business increase sales through email marketing."
+      },
+      {
+        "date": "2026-05-29",
+        "event": "Social Media Live",
+        "topic": "How to Leverage Social Media for Crisis Management",
+        "goal": "Share expert advice on how to use social media for crisis management and maintain a positive brand image."
+      },
+      {
+        "date": "2026-05-30",
+        "event": "Webinar",
+        "topic": "Maximizing Your Website's Potential with the Right Digital Marketing Strategy",
+        "goal": "Host a webinar that offers actionable tips and strategies for businesses to maximize their website's potential through digital marketing."
+      },
+      {
+        "date": "2026-05-31",
+        "event": "New Blog Post",
+        "topic": "The Importance of Data-Driven Decision Making in Digital Marketing",
+        "goal": "Highlight the importance of data-driven decision making in digital marketing and provide tips on how to make informed decisions."
+      },
+      {
+        "date": "2026-06-01",
+        "event": "Social Media Post",
+        "topic": "Why You Need a Multichannel Advertising Strategy for Business",
+        "goal": "Explain the importance of having a multichannel advertising strategy for businesses and provide tips on how to implement one."
+      },
+      {
+        "date": "2026-06-02",
+        "event": "Blog Post",
+        "topic": "Maximizing Conversion Rates with Google Analytics",
+        "goal": "Provide tips and tricks on how to use Google Analytics to maximize conversion rates."
+      },
+      {
+        "date": "2026-06-03",
+        "event": "Email Marketing",
+        "topic": "How to Write an Effective Call-to-Action for Your Email Marketing Campaigns",
+        "goal": "Share expert advice on how to write an effective call-to-action for email marketing campaigns."
+      },
+      {
+        "date": "2026-06-04",
+        "event": "Google My Business Tutorial",
+        "topic": "How to Optimize Your Google My Business Listing for Local SEO",
+        "goal": "Provide step-by-step instructions on how to optimize Google My Business listings for better local search engine rankings."
+      },
+      {
+        "date": "2026-06-05",
+        "event": "Social Media Post",
+        "topic": "The Benefits of Consistent Branding for Business",
+        "goal": "Highlight the importance of maintaining a consistent brand image and provide tips on how to do it effectively."
+      },
+      {
+        "date": "2026-06-06",
+        "event": "Blog Post",
+        "topic": "Why You Need a Mobile-Friendly Website in Today's Digital Landscape",
+        "goal": "Explain the benefits of having a mobile-friendly website and provide tips on how to create one."
+      },
+      {
+        "date": "2026-06-07",
+        "event": "Webinar",
+        "topic": "Digital Marketing for E-commerce Businesses: Tips and Strategies for Growth",
+        "goal": "Host a webinar that offers actionable tips and strategies for e-commerce businesses to grow their digital presence."
+      },
+      {
+        "date": "2026-06-08",
+        "event": "Email Marketing",
+        "topic": "How to Use Email Marketing Automation to Enhance Your Campaigns",
+        "goal": "Share expert advice on how to use email marketing automation to enhance email marketing campaigns."
+      },
+      {
+        "date": "2026-06-09",
+        "event": "Social Media Live",
+        "topic": "How to Leverage Social Media for Event Marketing",
+        "goal": "Share expert advice on how to use social media for event marketing and promote events effectively."
+      },
+      {
+        "date": "2026-06-10",
+        "event": "Google Ads Tutorial",
+        "topic": "How to Create a Targeted Google Ads Campaign for Your Business",
+        "goal": "Provide step-by-step instructions on how to create a targeted Google Ads campaign for businesses."
+      },
+      {
+        "date": "2026-06-11",
+        "event": "Blog Post",
+        "topic": "Why You Need a Content Marketing Strategy for Business",
+        "goal": "Explain the importance of having a content marketing strategy for businesses and provide tips on how to create one."
+      },
+      {
+        "date": "2026-06-12",
+        "event": "Email Marketing",
+        "topic": "How to Write an Effective Subject Line for Your Email Marketing Campaigns",
+        "goal": "Share expert advice on how to write an effective subject line for email marketing campaigns."
+      },
+      {
+        "date": "2026-06-13",
+        "event": "Social Media Post",
+        "topic": "The Benefits of Using Instagram for Business",
+        "goal": "Highlight the benefits of using Instagram for businesses and provide tips on how to use it effectively."
+      },
+      {
+        "date": "2026-06-14",
+        "event": "Blog Post",
+        "topic": "Why You Need a Strong Brand Identity for Business",
+        "goal": "Explain the importance of a strong brand identity for businesses and provide tips on how to create one."
+      }
+    ]
+  },
+  {
+    "client": "Manofox",
+    "calendar": [
+      {
+        "date": "2026-05-15",
+        "event": "Friday Feature",
+        "topic": "Why Website Development Matters for Your Business",
+        "goal": "Drive traffic to Manofox's website, generate leads"
+      },
+      {
+        "date": "2026-05-16",
+        "event": "Social Spotlight",
+        "topic": "5 Essential Tips for Effective Social Media Marketing",
+        "goal": "Position Manofox as a thought leader, drive engagement"
+      },
+      {
+        "date": "2026-05-17",
+        "event": "Manofox Monday",
+        "topic": "Boost Your Online Presence with Google My Business",
+        "goal": "Highlight Manofox's expertise in GMB management, drive sign-ups"
+      },
+      {
+        "date": "2026-05-18",
+        "event": "Wednesday Wisdom",
+        "topic": "Maximizing Your Ad Spend with Data-Driven Insights",
+        "goal": "Establish Manofox as a trusted partner for Ads management"
+      },
+      {
+        "date": "2026-05-19",
+        "event": "Thursday Throwback",
+        "topic": "Success Stories: How Manofox Helped Businesses Grow",
+        "goal": "Build credibility and trust with customer testimonials"
+      },
+      {
+        "date": "2026-05-20",
+        "event": "Facebook Focus",
+        "topic": "The Power of Facebook Ads for Your Business",
+        "goal": "Drive engagement and generate leads"
+      },
+      {
+        "date": "2026-05-21",
+        "event": "Instagram Insights",
+        "topic": "Unlock Your Instagram Potential with Manofox's Expert Guidance",
+        "goal": "Highlight Manofox's expertise in social media marketing"
+      },
+      {
+        "date": "2026-05-22",
+        "event": "Expert Interview",
+        "topic": "The Future of Digital Marketing: Trends and Predictions",
+        "goal": "Establish Manofox as a thought leader, drive engagement"
+      },
+      {
+        "date": "2026-05-23",
+        "event": "Google My Business Tip",
+        "topic": "10 Essential Tips for Optimizing Your Google My Business Listing",
+        "goal": "Position Manofox as a trusted partner for GMB management"
+      },
+      {
+        "date": "2026-05-24",
+        "event": "Customer of the Month",
+        "topic": "Success Story: How Manofox Helped [Business] Achieve Their Goals",
+        "goal": "Build credibility and trust with customer testimonials"
+      },
+      {
+        "date": "2026-05-25",
+        "event": "Website Wednesday",
+        "topic": "The Importance of Website Security for Your Business",
+        "goal": "Highlight Manofox's expertise in website development"
+      },
+      {
+        "date": "2026-05-26",
+        "event": "Thursday Tip",
+        "topic": "5 Quick Tips for Improving Your Social Media Engagement",
+        "goal": "Drive engagement and generate leads"
+      },
+      {
+        "date": "2026-05-27",
+        "event": "Facebook Live",
+        "topic": "Live Q&A Session: Answering Your Burning Digital Marketing Questions",
+        "goal": "Establish Manofox as a trusted partner, drive engagement"
+      },
+      {
+        "date": "2026-05-28",
+        "event": "Instagram Contest",
+        "topic": "Enter Our Instagram Contest: Win a Free Digital Marketing Audit!",
+        "goal": "Drive engagement, generate leads"
+      },
+      {
+        "date": "2026-05-29",
+        "event": "Saturday Spotlight",
+        "topic": "The Benefits of Partnering with a Digital Marketing Agency",
+        "goal": "Highlight Manofox's expertise and services"
+      },
+      {
+        "date": "2026-05-30",
+        "event": "Sunday Sale",
+        "topic": "Limited Time Offer: Enroll Now and Get [Discount] on Your Digital Marketing Services",
+        "goal": "Drive conversions, generate revenue"
+      },
+      {
+        "date": "2026-05-31",
+        "event": "Monday Motivation",
+        "topic": "Kickstart Your Week with a Digital Marketing Strategy Session",
+        "goal": "Drive engagement, generate leads"
+      },
+      {
+        "date": "2026-06-01",
+        "event": "Tuesday Tip",
+        "topic": "The Importance of Measuring Your Digital Marketing Success",
+        "goal": "Establish Manofox as a trusted partner, drive engagement"
+      },
+      {
+        "date": "2026-06-02",
+        "event": "Wednesday Wisdom",
+        "topic": "Maximizing Your Website's Potential with Manofox's Expert Guidance",
+        "goal": "Highlight Manofox's expertise in website development"
+      },
+      {
+        "date": "2026-06-03",
+        "event": "Thursday Throwback",
+        "topic": "Success Stories: How Manofox Helped Businesses Grow",
+        "goal": "Build credibility and trust with customer testimonials"
+      },
+      {
+        "date": "2026-06-04",
+        "event": "Friday Feature",
+        "topic": "Unlock Your Social Media Potential with Manofox's Expert Guidance",
+        "goal": "Highlight Manofox's expertise in social media marketing"
+      },
+      {
+        "date": "2026-06-05",
+        "event": "Saturday Spotlight",
+        "topic": "The Benefits of Partnering with a Digital Marketing Agency",
+        "goal": "Highlight Manofox's expertise and services"
+      },
+      {
+        "date": "2026-06-06",
+        "event": "Sunday Sale",
+        "topic": "Limited Time Offer: Enroll Now and Get [Discount] on Your Digital Marketing Services",
+        "goal": "Drive conversions, generate revenue"
+      },
+      {
+        "date": "2026-06-07",
+        "event": "Monday Motivation",
+        "topic": "Kickstart Your Week with a Digital Marketing Strategy Session",
+        "goal": "Drive engagement, generate leads"
+      },
+      {
+        "date": "2026-06-08",
+        "event": "Tuesday Tip",
+        "topic": "The Importance of Google My Business for Your Business",
+        "goal": "Position Manofox as a trusted partner for GMB management"
+      },
+      {
+        "date": "2026-06-09",
+        "event": "Wednesday Wisdom",
+        "topic": "Maximizing Your Ads Spend with Data-Driven Insights",
+        "goal": "Establish Manofox as a trusted partner, drive engagement"
+      },
+      {
+        "date": "2026-06-10",
+        "event": "Thursday Throwback",
+        "topic": "Success Stories: How Manofox Helped Businesses Grow",
+        "goal": "Build credibility and trust with customer testimonials"
+      },
+      {
+        "date": "2026-06-11",
+        "event": "Friday Feature",
+        "topic": "Unlock Your Website's Potential with Manofox's Expert Guidance",
+        "goal": "Highlight Manofox's expertise in website development"
+      },
+      {
+        "date": "2026-06-12",
+        "event": "Saturday Spotlight",
+        "topic": "The Benefits of Partnering with a Digital Marketing Agency",
+        "goal": "Highlight Manofox's expertise and services"
+      },
+      {
+        "date": "2026-06-13",
+        "event": "Sunday Sale",
+        "topic": "Limited Time Offer: Enroll Now and Get [Discount] on Your Digital Marketing Services",
+        "goal": "Drive conversions, generate revenue"
+      },
+      {
+        "date": "2026-06-14",
+        "event": "Monday Motivation",
+        "topic": "Kickstart Your Week with a Digital Marketing Strategy Session",
+        "goal": "Drive engagement, generate leads"
+      }
+    ]
+  },
+  {
+    "client": "Manofox",
+    "calendar": [
+      {
+        "date": "2026-05-15",
+        "event": "Facebook Post",
+        "topic": "Benefits of a Mobile-Friendly Website",
+        "goal": "Increase social media engagement and drive traffic to website"
+      },
+      {
+        "date": "2026-05-16",
+        "event": "Instagram Post",
+        "topic": "The Impact of Local SEO on Business",
+        "goal": "Raise awareness about local SEO and its benefits"
+      },
+      {
+        "date": "2026-05-17",
+        "event": "Twitter Thread",
+        "topic": "10 Essential Steps to Improve Your Website's User Experience",
+        "goal": "Drive traffic to Manofox's website development services"
+      },
+      {
+        "date": "2026-05-18",
+        "event": "Blog Post",
+        "topic": "How to Optimize Your Google My Business Listing for Maximum Visibility",
+        "goal": "Establish Manofox as a thought leader in digital marketing"
+      },
+      {
+        "date": "2026-05-19",
+        "event": "Facebook Live",
+        "topic": "Q&A Session: Website Development and Digital Marketing",
+        "goal": "Build trust with target audience and increase engagement"
+      },
+      {
+        "date": "2026-05-20",
+        "event": "Email Newsletter",
+        "topic": "Unlock the Power of Social Media Marketing for Your Business",
+        "goal": "Drive email open rates and click-through rates"
+      },
+      {
+        "date": "2026-05-21",
+        "event": "YouTube Video",
+        "topic": "The Importance of Website Speed in User Experience",
+        "goal": "Establish Manofox as a credible source of digital marketing knowledge"
+      },
+      {
+        "date": "2026-05-22",
+        "event": "LinkedIn Post",
+        "topic": "Maximizing Your ROI from Facebook Ads",
+        "goal": "Appeal to B2B businesses and establish Manofox's expertise"
+      },
+      {
+        "date": "2026-05-23",
+        "event": "Instagram Story",
+        "topic": "Case Study: How Manofox Helped a Client Increase Sales",
+        "goal": "Build trust and showcase Manofox's expertise"
+      },
+      {
+        "date": "2026-05-24",
+        "event": "Twitter Post",
+        "topic": "10 Common Website Development Mistakes to Avoid",
+        "goal": "Drive traffic to Manofox's website development services"
+      },
+      {
+        "date": "2026-05-25",
+        "event": "Blog Post",
+        "topic": "The Role of Ads Management in Digital Marketing Strategy",
+        "goal": "Establish Manofox as a thought leader in digital marketing"
+      },
+      {
+        "date": "2026-05-26",
+        "event": "Facebook Post",
+        "topic": "Tips for Improving Your Website's Loading Speed",
+        "goal": "Drive traffic to Manofox's website development services"
+      },
+      {
+        "date": "2026-05-27",
+        "event": "YouTube Video",
+        "topic": "How to Create a Winning Digital Marketing Strategy",
+        "goal": "Establish Manofox as a credible source of digital marketing knowledge"
+      },
+      {
+        "date": "2026-05-28",
+        "event": "Instagram Post",
+        "topic": "The Benefits of Outsourcing Your Digital Marketing",
+        "goal": "Appeal to small businesses and establish Manofox's expertise"
+      },
+      {
+        "date": "2026-05-29",
+        "event": "LinkedIn Post",
+        "topic": "Maximizing Your Google My Business Listing's Potential",
+        "goal": "Establish Manofox as a thought leader in digital marketing"
+      },
+      {
+        "date": "2026-05-30",
+        "event": "Email Newsletter",
+        "topic": "Enroll Now: Manofox's Digital Marketing Services",
+        "goal": "Drive email open rates and click-through rates"
+      },
+      {
+        "date": "2026-05-31",
+        "event": "Twitter Thread",
+        "topic": "Common Social Media Marketing Mistakes to Avoid",
+        "goal": "Drive traffic to Manofox's social media marketing services"
+      },
+      {
+        "date": "2026-06-01",
+        "event": "Facebook Live",
+        "topic": "Q&A Session: Digital Marketing and Online Advertising",
+        "goal": "Build trust with target audience and increase engagement"
+      },
+      {
+        "date": "2026-06-02",
+        "event": "Blog Post",
+        "topic": "How to Measure the ROI of Your Digital Marketing Efforts",
+        "goal": "Establish Manofox as a thought leader in digital marketing"
+      },
+      {
+        "date": "2026-06-03",
+        "event": "Instagram Story",
+        "topic": "Case Study: How Manofox Helped a Client Increase Sales",
+        "goal": "Build trust and showcase Manofox's expertise"
+      },
+      {
+        "date": "2026-06-04",
+        "event": "LinkedIn Post",
+        "topic": "The Future of Digital Marketing: Emerging Trends",
+        "goal": "Establish Manofox as a thought leader in digital marketing"
+      },
+      {
+        "date": "2026-06-05",
+        "event": "YouTube Video",
+        "topic": "How to Create a Winning Social Media Marketing Strategy",
+        "goal": "Establish Manofox as a credible source of digital marketing knowledge"
+      },
+      {
+        "date": "2026-06-06",
+        "event": "Twitter Post",
+        "topic": "10 Essential Tools for Website Development",
+        "goal": "Drive traffic to Manofox's website development services"
+      },
+      {
+        "date": "2026-06-07",
+        "event": "Email Newsletter",
+        "topic": "Unlock the Power of Ads Management for Your Business",
+        "goal": "Drive email open rates and click-through rates"
+      },
+      {
+        "date": "2026-06-08",
+        "event": "Facebook Post",
+        "topic": "The Benefits of Outsourcing Your Website Development",
+        "goal": "Appeal to small businesses and establish Manofox's expertise"
+      },
+      {
+        "date": "2026-06-09",
+        "event": "Instagram Post",
+        "topic": "Maximizing Your Website's Potential with GMB Optimization",
+        "goal": "Establish Manofox as a thought leader in digital marketing"
+      },
+      {
+        "date": "2026-06-10",
+        "event": "LinkedIn Post",
+        "topic": "The Importance of Website Security in User Experience",
+        "goal": "Establish Manofox as a credible source of digital marketing knowledge"
+      },
+      {
+        "date": "2026-06-11",
+        "event": "YouTube Video",
+        "topic": "How to Measure the Success of Your Digital Marketing Campaigns",
+        "goal": "Establish Manofox as a thought leader in digital marketing"
+      },
+      {
+        "date": "2026-06-12",
+        "event": "Twitter Thread",
+        "topic": "Common Website Development Mistakes to Avoid",
+        "goal": "Drive traffic to Manofox's website development services"
+      },
+      {
+        "date": "2026-06-13",
+        "event": "Facebook Live",
+        "topic": "Q&A Session: Website Development and Digital Marketing",
+        "goal": "Build trust with target audience and increase engagement"
+      },
+      {
+        "date": "2026-06-14",
+        "event": "Blog Post",
+        "topic": "The Role of Social Media in Business Marketing Strategies",
+        "goal": "Establish Manofox as a thought leader in digital marketing"
+      },
+      {
+        "date": "2026-06-15",
+        "event": "Instagram Story",
+        "topic": "Case Study: How Manofox Helped a Client Increase Sales",
+        "goal": "Build trust and showcase Manofox's expertise"
+      }
+    ]
+  }
+]

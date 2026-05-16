@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<title>AI Content Dashboard</title>
+
+<link rel="stylesheet" href="style.css">
+
+<meta
+name="viewport"
+content="width=device-width, initial-scale=1.0"
+>
+
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>
+        AI Content Automation Dashboard
+    </h1>
+
+    <!-- =========================
+         AUTOMATION STATUS BADGE
+    ========================== -->
+
+    <div class="auto-banner" id="autoBanner">
+
+        <span class="auto-dot"></span>
+
+        <span id="autoStatusText">
+            Connecting to automation stream…
+        </span>
+
+    </div>
+
+    <!-- =========================
+         CREATE CLIENT
+    ========================== -->
+
+    <div class="section">
+
+        <h2>Create Client</h2>
+
+        <div class="form-grid">
+
+            <input id="name"     placeholder="Brand Name">
+            <input id="industry" placeholder="Industry">
+            <input id="tone"     placeholder="Tone">
+            <input id="audience" placeholder="Audience">
+            <input id="services" placeholder="Services">
+            <input id="style"    placeholder="Style">
+            <input id="cta"      placeholder="CTA">
+
+        </div>
+
+        <button class="main-btn" onclick="saveClient()">
+            Save Client
+        </button>
+
+    </div>
+
+    <!-- =========================
+         CALENDAR
+    ========================== -->
+
+    <div class="section">
+
+        <h2>Generate Calendar</h2>
+
+        <div class="calendar-top">
+            <select id="clients"></select>
+            <button class="main-btn" onclick="generateCalendar()">
+                Generate Calendar
+            </button>
+        </div>
+
+        <div id="calendar"></div>
+
+    </div>
+
+    <!-- =========================
+         UPLOAD QUEUE  (Step 3)
+    ========================== -->
+
+    <div class="section">
+
+        <h2>
+            Upload Content Files
+        </h2>
+
+        <p class="subtext">
+            File names become AI prompts — name them descriptively!
+            New images from ChatGPT will appear here automatically.
+        </p>
+
+        <div id="fileQueue">
+            <div class="empty-state">
+                No generated images yet
+            </div>
+        </div>
+
+        <button
+        id="generateGroqBtn"
+        class="main-btn groq-btn"
+        onclick="manualGenerateAllCaptions()"
+        >
+            ⚡ Generate with Groq
+        </button>
+
+    </div>
+
+    <!-- =========================
+         TARGETS  (Step 1)
+    ========================== -->
+
+    <div class="section">
+
+        <h2>
+            Select Posting Targets
+        </h2>
+
+        <p class="subtext" id="targetsHelp">
+            Loading pages from Meta…
+        </p>
+
+        <div class="targets-grid" id="targetsGrid"></div>
+
+    </div>
+
+    <!-- =========================
+         SCHEDULER  (Step 2)
+    ========================== -->
+
+    <div class="section">
+
+        <h2>
+            Posting Frequency
+        </h2>
+
+        <div class="freq-wrap">
+
+            <button
+            class="freq-opt"
+            data-freq="daily"
+            onclick="selectFreq(this)"
+            >
+                Daily
+            </button>
+
+            <button
+            class="freq-opt"
+            data-freq="weekly"
+            onclick="selectFreq(this)"
+            >
+                Weekly
+            </button>
+
+            <button
+            class="freq-opt active"
+            data-freq="custom"
+            onclick="selectFreq(this)"
+            >
+                Custom Days
+            </button>
+
+        </div>
+
+        <div class="days-wrap" id="daysWrap">
+
+            <div class="day-pill" data-d="Mon" onclick="toggleDay(this)">Mon</div>
+            <div class="day-pill" data-d="Tue" onclick="toggleDay(this)">Tue</div>
+            <div class="day-pill" data-d="Wed" onclick="toggleDay(this)">Wed</div>
+            <div class="day-pill" data-d="Thu" onclick="toggleDay(this)">Thu</div>
+            <div class="day-pill" data-d="Fri" onclick="toggleDay(this)">Fri</div>
+            <div class="day-pill" data-d="Sat" onclick="toggleDay(this)">Sat</div>
+            <div class="day-pill" data-d="Sun" onclick="toggleDay(this)">Sun</div>
+
+        </div>
+
+        <div class="schedule-grid">
+
+            <div>
+                <label>Start Date</label>
+                <input
+                type="date"
+                id="schStartDate"
+                class="schedule-input"
+                >
+            </div>
+
+            <div>
+                <label>Posting Time</label>
+                <input
+                type="time"
+                id="schTime"
+                class="schedule-input"
+                >
+            </div>
+
+        </div>
+
+        <button
+        class="publish-btn"
+        id="publishBtn"
+        onclick="publishToMeta()"
+        >
+            🚀 Schedule All Posts to Meta
+        </button>
+
+    </div>
+
+    <!-- =========================
+         LIVE AUTOMATION LOGS
+    ========================== -->
+
+    <div class="section">
+
+        <h2>Live Automation Logs</h2>
+
+        <div id="automationLogs" class="bot-log">
+            Waiting for automation…
+        </div>
+
+    </div>
+
+    <!-- =========================
+         GENERATED POSTS
+    ========================== -->
+
+    <div class="section">
+
+        <h2>Generated Posts</h2>
+        <div id="posts"></div>
+
+    </div>
+
+</div>
+
+<script src="app.js"></script>
+
+</body>
+</html>
