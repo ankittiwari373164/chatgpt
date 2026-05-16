@@ -42,6 +42,18 @@ h2 {
     margin-bottom: 24px;
 }
 
+.morning-section {
+    background: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(236,72,153,0.06));
+    border: 1px solid rgba(99,102,241,0.25);
+}
+
+.morning-section h2 {
+    background: linear-gradient(90deg, #818cf8, #f472b6);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
 /* ─── AUTO BANNER ─── */
 
 .auto-banner {

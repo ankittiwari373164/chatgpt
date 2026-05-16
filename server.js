@@ -451,12 +451,35 @@ app.get("/meta/pages", requireMongo, async (req, res) => {
     try {
 
         const pages = await getAllMetaPages();
+
+        // Also try a fresh fetch when cache is empty so we can surface
+        // the real underlying error (expired token, etc.)
+        if (!pages.length) {
+
+            try {
+
+                const fresh = await refreshMetaPages();
+                return res.json(fresh);
+
+            } catch (refreshErr) {
+
+                const m = refreshErr.response?.data?.error?.message ||
+                          refreshErr.message;
+
+                return res.json({
+                    error: `META_ACCESS_TOKEN failed: ${m}. ` +
+                           `Refresh it from Graph API Explorer.`,
+                    pages: []
+                });
+            }
+        }
+
         res.json(pages);
 
     } catch (err) {
 
         console.log("/meta/pages error:", err.message);
-        res.json([]);
+        res.json({ error: err.message, pages: [] });
     }
 });
 
@@ -710,6 +733,169 @@ app.post("/cron/run-now", requireAdmin, async (req, res) => {
     res.json({ success: true, message: "Started in background." });
 
     dailyCron.runDailyJob().catch(e => console.log("manual cron fail:", e));
+});
+
+/* ============================================================
+   /generate-and-schedule  — THE FULL PIPELINE IN ONE CALL.
+
+   Used by:
+     - The dashboard "Generate Creative" button on any calendar
+       item
+     - The "🌅 Generate & Schedule for ALL Clients" button
+     - The daily 9 AM IST cron (via dailyCron.runForClient)
+
+   Body: { clientName, item? }
+     - If `item` is missing, the next undone calendar item for
+       the client is used (same logic as the cron).
+
+   Returns: full run log so the dashboard can show what
+   happened (image URL, scheduled status, errors, etc.)
+============================================================ */
+
+const runningJobs = new Set(); // clientName values being processed
+
+app.post("/generate-and-schedule", requireMongo, async (req, res) => {
+
+    const { clientName, item } = req.body || {};
+
+    if (!clientName) {
+
+        return res.json({ success: false, error: "clientName required" });
+    }
+
+    if (runningJobs.has(clientName)) {
+
+        return res.json({
+            success: false,
+            error:   "Already running a job for this client — wait for it to finish."
+        });
+    }
+
+    runningJobs.add(clientName);
+
+    try {
+
+        const client = await Client.findOne({ name: clientName }).lean();
+
+        if (!client) {
+
+            return res.json({
+                success: false,
+                error: `Client "${clientName}" not found.`
+            });
+        }
+
+        const pages = await getAllMetaPages();
+
+        if (!pages.length) {
+
+            return res.json({
+                success: false,
+                error:
+                    "No Meta pages available. Check META_ACCESS_TOKEN " +
+                    "(it may have expired — refresh from Graph API Explorer)."
+            });
+        }
+
+        const today = new Date(Date.now() + 5.5 * 60 * 60 * 1000)
+                        .toISOString().slice(0, 10);
+
+        const log = await dailyCron.runForClient(
+            client, today, pages, { item }
+        );
+
+        // Broadcast to dashboard so it can refresh its UI
+        broadcast("pipeline-done", log);
+
+        res.json({
+            success: log.status === "scheduled",
+            log
+        });
+
+    } catch (err) {
+
+        console.log("/generate-and-schedule error:",
+            err.response?.data || err.message);
+
+        res.json({ success: false, error: err.message });
+
+    } finally {
+
+        runningJobs.delete(clientName);
+    }
+});
+
+/* ============================================================
+   /generate-all-now  — fires the pipeline for every client,
+   one after another, in the background.
+   The dashboard's "🌅 Generate for All Clients" button.
+============================================================ */
+
+let allRunInProgress = false;
+
+app.post("/generate-all-now", requireMongo, async (req, res) => {
+
+    if (allRunInProgress) {
+
+        return res.json({
+            success: false,
+            error:   "An all-clients run is already in progress."
+        });
+    }
+
+    allRunInProgress = true;
+
+    res.json({ success: true, message: "Started in background. Watch the logs." });
+
+    /* ---------- Run in background ---------- */
+
+    (async () => {
+
+        try {
+
+            await dailyCron.runDailyJob({
+                onProgress: log => broadcast("pipeline-done", log)
+            });
+
+            broadcast("pipeline-done", {
+                client: "—",
+                status: "all-done",
+                reason: "Morning run finished for all clients."
+            });
+
+        } catch (err) {
+
+            console.log("generate-all-now error:", err.message);
+
+        } finally {
+
+            allRunInProgress = false;
+        }
+    })();
+});
+
+/* ============================================================
+   /calendar/:client  — fetch a previously saved calendar.
+   Called by the dashboard on page load so calendars survive
+   refresh.
+============================================================ */
+
+app.get("/calendar/:client", requireMongo, async (req, res) => {
+
+    try {
+
+        const cal = await Calendar.findOne({
+            client: req.params.client
+        }).lean();
+
+        if (!cal) return res.json({ calendar: [] });
+
+        res.json({ calendar: cal.calendar || [] });
+
+    } catch (err) {
+
+        res.json({ calendar: [], error: err.message });
+    }
 });
 
 /* ============================================================

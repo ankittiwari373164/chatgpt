@@ -37,6 +37,30 @@ content="width=device-width, initial-scale=1.0"
     </div>
 
     <!-- =========================
+         MORNING BUTTON
+    ========================== -->
+
+    <div class="section morning-section">
+
+        <h2>🌅 Morning Run</h2>
+
+        <p class="subtext">
+            Runs the full pipeline (generate image → caption → schedule to FB &amp; Instagram)
+            for every client that has a saved calendar. Same thing the
+            <strong>9:00 AM IST daily cron</strong> does — but on demand.
+        </p>
+
+        <button
+        class="publish-btn"
+        id="runAllBtn"
+        onclick="generateForAllClients()"
+        >
+            🌅 Generate &amp; Schedule for ALL Clients
+        </button>
+
+    </div>
+
+    <!-- =========================
          CREATE CLIENT
     ========================== -->
 

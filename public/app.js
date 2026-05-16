@@ -68,6 +68,13 @@ async function loadClients() {
 
         window.clientsData = clients;
 
+        // Auto-load the saved calendar whenever the user changes
+        // the selected client.
+        select.onchange = loadSavedCalendar;
+
+        // Also load the calendar for the initially selected client
+        if (clients.length) loadSavedCalendar();
+
     } catch (e) {
 
         console.log(e);
@@ -113,25 +120,66 @@ async function generateCalendar() {
         return;
     }
 
-    const response = await fetch("/generate-calendar", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(client)
-    });
+    addAutomationLog(
+        `📅 Generating 30-day calendar for "${client.name}"…`,
+        "info"
+    );
 
-    const calendar = await response.json();
-    const box      = document.getElementById("calendar");
+    try {
+
+        const response = await fetch("/generate-calendar", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify(client)
+        });
+
+        const calendar = await response.json();
+
+        renderCalendar(client, calendar);
+
+        addAutomationLog(
+            `✓ Calendar saved (${calendar.length} items).`,
+            "ok"
+        );
+
+    } catch (err) {
+
+        addAutomationLog("Calendar failed: " + err.message, "err");
+    }
+}
+
+/* ============================================================
+   Re-render a calendar (used both after generateCalendar()
+   and on page-load when fetching a saved calendar)
+============================================================ */
+
+function renderCalendar(client, calendar) {
+
+    const box = document.getElementById("calendar");
     if (!box) return;
 
     box.innerHTML = "";
+
+    if (!Array.isArray(calendar) || !calendar.length) {
+
+        box.innerHTML =
+            '<div class="empty-state" style="margin-top:10px">' +
+            'No calendar saved for this client yet. ' +
+            'Click <strong>Generate Calendar</strong>.</div>';
+        return;
+    }
 
     calendar.forEach(item => {
 
         const card = document.createElement("div");
         card.className = "calendar-item";
 
+        const doneTag = item.done
+            ? '<span style="color:#22c55e;font-size:11px">✓ done</span>'
+            : '';
+
         card.innerHTML = `
-          <h3>${item.topic || ""}</h3>
+          <h3>${item.topic || ""} ${doneTag}</h3>
           <p>${item.date || ""}</p>
           <p>${item.event || ""}</p>
           <p>${item.goal || ""}</p>
@@ -139,39 +187,146 @@ async function generateCalendar() {
 
         const btn = document.createElement("button");
         btn.textContent = "Generate Creative";
-        btn.onclick = () => generateCreative(client, item);
+        btn.onclick = () => generateCreative(client, item, btn);
 
         card.appendChild(btn);
         box.appendChild(card);
     });
 }
 
-async function generateCreative(client, item) {
+/* ============================================================
+   Load a previously saved calendar from the server
+============================================================ */
 
-    const response = await fetch("/generate-prompt", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ client, item })
-    });
+async function loadSavedCalendar() {
 
-    const data = await response.json();
+    const name = document.getElementById("clients")?.value;
+    if (!name) return;
 
-    await fetch("/save-prompt", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-            client: client.name,
-            prompt: data.prompt
-        })
-    });
+    const client = (window.clientsData || []).find(
+        c => c.name === name.trim()
+    );
+    if (!client) return;
+
+    try {
+
+        const r = await fetch(
+            "/calendar/" + encodeURIComponent(client.name)
+        );
+        const d = await r.json();
+
+        renderCalendar(client, d.calendar || []);
+
+    } catch (e) {
+
+        console.log("loadSavedCalendar error", e);
+    }
+}
+
+async function generateCreative(client, item, btn) {
+
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Running…"; }
 
     addAutomationLog(
-        "Prompt saved — Tampermonkey will pick it up shortly.",
-        "ok"
+        `🚀 Starting full pipeline for "${client.name}" → "${item.topic}"…`,
+        "info"
     );
 
-    localStorage.setItem("client", client.name);
-    localStorage.setItem("prompt", data.prompt);
+    try {
+
+        const response = await fetch("/generate-and-schedule", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({
+                clientName: client.name,
+                item
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+
+            addAutomationLog(
+                `✅ ${client.name}: scheduled to ${data.log.page} ` +
+                `[image via ${data.log.imageSource}]`,
+                "ok"
+            );
+
+            loadPosts();
+
+        } else {
+
+            addAutomationLog(
+                `❌ ${client.name}: ${data.error || data.log?.reason || "unknown error"}`,
+                "err"
+            );
+        }
+
+    } catch (e) {
+
+        addAutomationLog("Pipeline error: " + e.message, "err");
+
+    } finally {
+
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Generate Creative";
+        }
+    }
+}
+
+/* ============================================================
+   GENERATE FOR ALL CLIENTS (manual morning button)
+============================================================ */
+
+async function generateForAllClients() {
+
+    if (!confirm(
+        "Run the full pipeline (generate image → caption → schedule to Meta) " +
+        "for EVERY client right now?\n\n" +
+        "This will take a few minutes."
+    )) return;
+
+    const btn = document.getElementById("runAllBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Running…"; }
+
+    addAutomationLog("🌅 Triggering pipeline for ALL clients…", "warn");
+
+    try {
+
+        const r = await fetch("/generate-all-now", { method: "POST" });
+        const d = await r.json();
+
+        if (d.success) {
+
+            addAutomationLog(
+                "✅ Background run started. Check the logs below as each " +
+                "client completes.",
+                "ok"
+            );
+
+        } else {
+
+            addAutomationLog("❌ " + (d.error || "failed to start"), "err");
+        }
+
+    } catch (e) {
+
+        addAutomationLog("Network error: " + e.message, "err");
+
+    } finally {
+
+        // Keep button disabled for 60s — background run takes a while
+        setTimeout(() => {
+
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = "🌅 Generate & Schedule for ALL Clients";
+            }
+
+        }, 60000);
+    }
 }
 
 /* ============================================================
@@ -183,7 +338,26 @@ async function loadMetaTargets() {
     try {
 
         const response = await fetch("/meta/pages");
-        metaTargets    = await response.json();
+        const data     = await response.json();
+
+        // Server returns either an array OR {error, pages: []}
+        if (Array.isArray(data)) {
+
+            metaTargets = data;
+
+        } else {
+
+            metaTargets = data.pages || [];
+
+            if (data.error) {
+
+                document.getElementById("targetsHelp").textContent =
+                    "⚠ " + data.error;
+
+                addAutomationLog(data.error, "err");
+                return;
+            }
+        }
 
         renderTargets();
 
@@ -191,7 +365,7 @@ async function loadMetaTargets() {
 
         console.log(e);
         document.getElementById("targetsHelp").textContent =
-            "Could not load Meta pages — check META_ACCESS_TOKEN in .env";
+            "Could not load Meta pages — " + e.message;
     }
 }
 
@@ -829,6 +1003,26 @@ function connectSSE() {
             `Server confirmed scheduling for post ${postId}`,
             "ok"
         );
+    });
+
+    es.addEventListener("pipeline-done", evt => {
+
+        try {
+
+            const log = JSON.parse(evt.data);
+            const ok  = log.status === "scheduled";
+
+            addAutomationLog(
+                `${ok ? "✅" : "⏭ "} ${log.client}: ${log.status}` +
+                (log.reason ? ` — ${log.reason}` : "") +
+                (log.page   ? ` → ${log.page}`   : "") +
+                (log.imageSource ? ` [${log.imageSource}]` : ""),
+                ok ? "ok" : "warn"
+            );
+
+            if (ok) loadPosts();
+
+        } catch (e) { console.log(e); }
     });
 
     es.onerror = () => {

@@ -44,4 +44,4 @@ services:
         sync: false
 
       - key: IMAGE_FALLBACK_ENABLED
-        value: "true"
+        value: "false"
