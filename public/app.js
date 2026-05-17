@@ -245,7 +245,9 @@ async function generateCreative(client, item, btn) {
 
         const data = await response.json();
 
-        if (data.success) {
+        const status = data.log?.status;
+
+        if (status === "scheduled") {
 
             addAutomationLog(
                 `✅ ${client.name}: scheduled to ${data.log.page} ` +
@@ -254,6 +256,14 @@ async function generateCreative(client, item, btn) {
             );
 
             loadPosts();
+
+        } else if (status === "queued") {
+
+            addAutomationLog(
+                `📨 ${client.name}: queued for Tampermonkey. ` +
+                `Open chatgpt.com to let it pick up the prompt.`,
+                "info"
+            );
 
         } else {
 
