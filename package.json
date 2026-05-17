@@ -4,8 +4,9 @@
   "main": "server.js",
   "type": "commonjs",
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   },
+  "packageManager": "npm@10.5.0",
   "scripts": {
     "start":   "node server.js",
     "migrate": "node db/migrate.js"

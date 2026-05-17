@@ -1,27 +1,21 @@
-# ============================================================
-#  Render deployment — drop this file at the repo root.
-#  Then: New + → Blueprint → connect your Git repo → deploy.
-# ============================================================
-
 services:
 
   - type: web
     name: ai-content-automation
     runtime: node
     plan: free
-    region: oregon         # or singapore / frankfurt — closer to you
+    region: oregon
     branch: main
-    buildCommand: npm install
-    startCommand: npm start
+    buildCommand: npm ci || npm install
+    startCommand: node server.js
     healthCheckPath: /health
     autoDeploy: true
 
     envVars:
 
       - key: NODE_VERSION
-        value: 20
+        value: "20"
 
-      # Set these manually in the Render dashboard — never commit secrets
       - key: ADMIN_TOKEN
         sync: false
 
@@ -44,4 +38,4 @@ services:
         sync: false
 
       - key: IMAGE_FALLBACK_ENABLED
-        value: "false"
+        value: "true"
