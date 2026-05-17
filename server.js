@@ -111,20 +111,58 @@ app.get("/current-task", requireMongo, async (req, res) => {
 
     try {
 
-        const pending = await Prompt.findOne({ generated: false }).sort({ createdAt: 1 });
+        const LOCK_MS = 5 * 60 * 1000;
+        const expiry  = new Date(Date.now() - LOCK_MS);
 
-        if (!pending) return res.json(null);
+        const claimed = await Prompt.findOneAndUpdate(
+            {
+                generated: false,
+                $or: [
+                    { claimedAt: null },
+                    { claimedAt: { $lt: expiry } }
+                ]
+            },
+            {
+                $set: { claimedAt: new Date() },
+                $inc: { attempts: 1 }
+            },
+            {
+                sort: { createdAt: 1 },
+                new:  true
+            }
+        );
+
+        if (!claimed) return res.json(null);
 
         res.json({
-            id:     pending._legacyId || pending._id,
-            client: pending.client,
-            prompt: pending.prompt
+            id:     claimed._legacyId || claimed._id,
+            client: claimed.client,
+            prompt: claimed.prompt
         });
 
     } catch (err) {
 
-        console.log(err);
+        console.log("/current-task error:", err.message);
         res.json(null);
+    }
+});
+
+app.post("/task/:id/fail", requireMongo, async (req, res) => {
+
+    try {
+
+        const id = Number(req.params.id) || req.params.id;
+
+        await Prompt.updateOne(
+            { _legacyId: id, generated: false },
+            { $set: { claimedAt: null } }
+        );
+
+        res.json({ ok: true });
+
+    } catch (err) {
+
+        res.json({ ok: false, error: err.message });
     }
 });
 

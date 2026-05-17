@@ -33,6 +33,8 @@ const PromptSchema = new Schema({
     source:     { type: String, default: "manual" }, // "manual" | "cron" | "calendar"
     image:      String,
     error:      String,
+    claimedAt:  { type: Date, default: null }, // null = available; Date = locked by Tampermonkey
+    attempts:   { type: Number, default: 0 },
     createdAt:  { type: Date, default: Date.now }
 }, { timestamps: true });
 
