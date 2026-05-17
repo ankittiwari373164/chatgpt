@@ -2,11 +2,11 @@
    STATE
 ============================================================ */
 
-let schedulerQueue = [];   // posts currently displayed in file-queue
-let metaTargets    = [];   // pages fetched from /meta/pages
-let selectedTargets = new Set();  // pageId strings selected
-let alreadyAutomated = new Set(); // post.id we've already auto-pushed
-let currentFreq = "custom";
+let schedulerQueue   = [];
+let metaTargets      = [];
+let selectedTargets  = new Set();
+let alreadyAutomated = new Set();
+let currentFreq      = "custom";
 
 /* ============================================================
    AUTOMATION LOG
@@ -15,7 +15,6 @@ let currentFreq = "custom";
 function addAutomationLog(message, type = "info") {
 
     const log = document.getElementById("automationLogs");
-
     if (!log) return;
 
     const colors = {
@@ -62,17 +61,13 @@ async function loadClients() {
 
         clients.forEach(client => {
 
-            select.innerHTML +=
-                `<option>${client.name}</option>`;
+            select.innerHTML += `<option>${client.name}</option>`;
         });
 
         window.clientsData = clients;
 
-        // Auto-load the saved calendar whenever the user changes
-        // the selected client.
         select.onchange = loadSavedCalendar;
 
-        // Also load the calendar for the initially selected client
         if (clients.length) loadSavedCalendar();
 
     } catch (e) {
@@ -133,12 +128,26 @@ async function generateCalendar() {
             body:    JSON.stringify(client)
         });
 
-        const calendar = await response.json();
+        const data = await response.json();
 
-        renderCalendar(client, calendar);
+        if (!response.ok || !Array.isArray(data)) {
+
+            const msg = data?.error || ("HTTP " + response.status);
+
+            addAutomationLog(
+                "Calendar generation failed: " + msg +
+                " — try again in a minute (Groq rate limit).",
+                "err"
+            );
+
+            await loadSavedCalendar();
+            return;
+        }
+
+        renderCalendar(client, data);
 
         addAutomationLog(
-            `✓ Calendar saved (${calendar.length} items).`,
+            `✓ Calendar saved (${data.length} items).`,
             "ok"
         );
 
@@ -147,11 +156,6 @@ async function generateCalendar() {
         addAutomationLog("Calendar failed: " + err.message, "err");
     }
 }
-
-/* ============================================================
-   Re-render a calendar (used both after generateCalendar()
-   and on page-load when fetching a saved calendar)
-============================================================ */
 
 function renderCalendar(client, calendar) {
 
@@ -193,10 +197,6 @@ function renderCalendar(client, calendar) {
         box.appendChild(card);
     });
 }
-
-/* ============================================================
-   Load a previously saved calendar from the server
-============================================================ */
 
 async function loadSavedCalendar() {
 
@@ -276,10 +276,6 @@ async function generateCreative(client, item, btn) {
     }
 }
 
-/* ============================================================
-   GENERATE FOR ALL CLIENTS (manual morning button)
-============================================================ */
-
 async function generateForAllClients() {
 
     if (!confirm(
@@ -301,8 +297,7 @@ async function generateForAllClients() {
         if (d.success) {
 
             addAutomationLog(
-                "✅ Background run started. Check the logs below as each " +
-                "client completes.",
+                "✅ Background run started. Check the logs below as each client completes.",
                 "ok"
             );
 
@@ -317,7 +312,6 @@ async function generateForAllClients() {
 
     } finally {
 
-        // Keep button disabled for 60s — background run takes a while
         setTimeout(() => {
 
             if (btn) {
@@ -340,7 +334,6 @@ async function loadMetaTargets() {
         const response = await fetch("/meta/pages");
         const data     = await response.json();
 
-        // Server returns either an array OR {error, pages: []}
         if (Array.isArray(data)) {
 
             metaTargets = data;
@@ -351,9 +344,7 @@ async function loadMetaTargets() {
 
             if (data.error) {
 
-                document.getElementById("targetsHelp").textContent =
-                    "⚠ " + data.error;
-
+                document.getElementById("targetsHelp").textContent = "⚠ " + data.error;
                 addAutomationLog(data.error, "err");
                 return;
             }
@@ -423,16 +414,7 @@ function renderTargets() {
     });
 }
 
-/* ============================================================
-   CLIENT → PAGE MATCHING
-   Fuzzy-match a client name against Meta pages, e.g.
-     "Manofox"          → "Manofox Pvt."
-     "Sehatfull"        → "Sehatfull Foods"
-     "Bon Shubharambh"  → "Bon Shubharambh Play School and Day Care"
-============================================================ */
-
 function normalizeName(s) {
-
     return (s || "")
         .toLowerCase()
         .replace(/\b(pvt|ltd|llp|inc|co|company)\.?\b/g, "")
@@ -447,32 +429,19 @@ function findPageForClient(clientName) {
     const target = normalizeName(clientName);
     if (!target) return null;
 
-    // 1. exact normalized match
-    let hit = metaTargets.find(
-        p => normalizeName(p.pageName) === target
-    );
+    let hit = metaTargets.find(p => normalizeName(p.pageName) === target);
     if (hit) return hit;
 
-    // 2. page name STARTS WITH client name  (Manofox → Manofox Pvt.)
-    hit = metaTargets.find(p =>
-        normalizeName(p.pageName).startsWith(target)
-    );
+    hit = metaTargets.find(p => normalizeName(p.pageName).startsWith(target));
     if (hit) return hit;
 
-    // 3. client name STARTS WITH page name
-    hit = metaTargets.find(p =>
-        target.startsWith(normalizeName(p.pageName))
-    );
+    hit = metaTargets.find(p => target.startsWith(normalizeName(p.pageName)));
     if (hit) return hit;
 
-    // 4. token overlap — at least one word in common, score = #common tokens
     const cTokens = new Set(target.split(" ").filter(Boolean));
-
-    let best = null;
-    let bestScore = 0;
+    let best = null, bestScore = 0;
 
     for (const p of metaTargets) {
-
         const pTokens = normalizeName(p.pageName).split(" ").filter(Boolean);
         let score = 0;
         for (const t of pTokens) if (cTokens.has(t)) score++;
@@ -495,7 +464,6 @@ function toggleTargetTile(tile, key) {
 
 function getSelectedTargets() {
 
-    // Build the array the backend expects
     const out = [];
 
     metaTargets.forEach(page => {
@@ -533,12 +501,10 @@ function selectFreq(btn) {
 }
 
 function toggleDay(el) {
-
     el.classList.toggle("selected");
 }
 
 function getSelectedDays() {
-
     return Array.from(
         document.querySelectorAll(".day-pill.selected")
     ).map(d => d.dataset.d);
@@ -546,55 +512,35 @@ function getSelectedDays() {
 
 function autoSelectTodayCustomDay() {
 
-    // Switch frequency to "Custom Days"
     document.querySelectorAll(".freq-opt").forEach(b => {
-
-        b.classList.toggle(
-            "active",
-            b.dataset.freq === "custom"
-        );
+        b.classList.toggle("active", b.dataset.freq === "custom");
     });
 
     currentFreq = "custom";
     document.getElementById("daysWrap").style.display = "";
 
-    // Today's short name
-    const todayName = [
-        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
-    ][new Date().getDay()];
+    const todayName = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date().getDay()];
 
     document.querySelectorAll(".day-pill").forEach(p => {
-
-        p.classList.toggle(
-            "selected",
-            p.dataset.d === todayName
-        );
+        p.classList.toggle("selected", p.dataset.d === todayName);
     });
 
-    addAutomationLog(
-        `📅 Custom Day → ${todayName} (today)`,
-        "info"
-    );
+    addAutomationLog(`📅 Custom Day → ${todayName} (today)`, "info");
 }
 
 function autoSelectNowDateTime() {
 
-    const now = new Date();
-
+    const now  = new Date();
     const yyyy = now.getFullYear();
     const mm   = String(now.getMonth() + 1).padStart(2, "0");
     const dd   = String(now.getDate()).padStart(2, "0");
-
-    const hh = String(now.getHours()).padStart(2, "0");
-    const mi = String(now.getMinutes()).padStart(2, "0");
+    const hh   = String(now.getHours()).padStart(2, "0");
+    const mi   = String(now.getMinutes()).padStart(2, "0");
 
     document.getElementById("schStartDate").value = `${yyyy}-${mm}-${dd}`;
     document.getElementById("schTime").value      = `${hh}:${mi}`;
 
-    addAutomationLog(
-        `⏰ Date ${yyyy}-${mm}-${dd}, Time ${hh}:${mi}`,
-        "info"
-    );
+    addAutomationLog(`⏰ Date ${yyyy}-${mm}-${dd}, Time ${hh}:${mi}`, "info");
 }
 
 /* ============================================================
@@ -607,7 +553,6 @@ function renderSchedulerQueue() {
     if (!container) return;
 
     if (!schedulerQueue.length) {
-
         container.innerHTML =
             `<div class="empty-state">No generated images yet</div>`;
         return;
@@ -621,10 +566,7 @@ function renderSchedulerQueue() {
         item.className = `file-item status-${post.status || "ready"}`;
 
         item.innerHTML = `
-          <img
-          src="${post.image}"
-          class="file-thumb"
-          >
+          <img src="${post.image}" class="file-thumb">
           <div class="file-info">
             <div class="file-name">${post.title || post.client || "Post"}</div>
             <div class="file-meta">${post.caption ? post.caption.slice(0, 100) : (post.prompt || "").slice(0, 100)}…</div>
@@ -672,22 +614,13 @@ async function generateGroqCaption(post) {
 
         renderSchedulerQueue();
 
-        addAutomationLog(
-            "✅ Groq caption generated",
-            "ok"
-        );
-
+        addAutomationLog("✅ Groq caption generated", "ok");
         return result;
 
     } catch (error) {
 
         console.log(error);
-
-        addAutomationLog(
-            "Groq error: " + error.message,
-            "err"
-        );
-
+        addAutomationLog("Groq error: " + error.message, "err");
         post.status = "failed";
         renderSchedulerQueue();
     }
@@ -698,7 +631,6 @@ async function manualGenerateAllCaptions() {
     for (const post of schedulerQueue) {
 
         if (post.status !== "ready") {
-
             await generateGroqCaption(post);
         }
     }
@@ -706,12 +638,10 @@ async function manualGenerateAllCaptions() {
 
 /* ============================================================
    PUBLISH TO META
-   Accepts an optional `targetPost` — if not given, defaults to the
-   first post in the scheduler queue (manual-button behaviour).
 ============================================================ */
 
-const currentlyScheduling = new Set(); // post.id values being sent
-const fullyScheduled      = new Set(); // post.id values already done
+const currentlyScheduling = new Set();
+const fullyScheduled      = new Set();
 
 async function publishToMeta(targetPost) {
 
@@ -720,13 +650,11 @@ async function publishToMeta(targetPost) {
         const post = targetPost || schedulerQueue[0];
 
         if (!post) {
-
             addAutomationLog("No queued post found", "err");
             return;
         }
 
         if (fullyScheduled.has(post.id)) {
-
             addAutomationLog(
                 `⏭ Post for "${post.client}" was already scheduled — skipping.`,
                 "warn"
@@ -735,7 +663,6 @@ async function publishToMeta(targetPost) {
         }
 
         if (currentlyScheduling.has(post.id)) {
-
             addAutomationLog(
                 `⏳ Post for "${post.client}" is still being scheduled — skipping duplicate.`,
                 "warn"
@@ -744,7 +671,6 @@ async function publishToMeta(targetPost) {
         }
 
         if (post.status !== "ready") {
-
             addAutomationLog(
                 `Post for "${post.client}" not ready — generate caption first.`,
                 "warn"
@@ -755,7 +681,6 @@ async function publishToMeta(targetPost) {
         const targets = getSelectedTargets();
 
         if (!targets.length) {
-
             addAutomationLog(
                 "No targets selected — select FB / IG tiles.",
                 "err"
@@ -763,23 +688,17 @@ async function publishToMeta(targetPost) {
             return;
         }
 
-        // Build schedule time from date + time inputs
         const dateVal = document.getElementById("schStartDate").value;
         const timeVal = document.getElementById("schTime").value;
 
         let scheduleTime;
 
         if (dateVal && timeVal) {
-
             scheduleTime = new Date(`${dateVal}T${timeVal}`);
-
         } else {
-
             scheduleTime = new Date();
         }
 
-        // Facebook requires scheduled_publish_time to be ≥10 min in the
-        // future. Bump to 11 min if user picked "now" or a past time.
         const minTime = new Date(Date.now() + 11 * 60 * 1000);
 
         if (isNaN(scheduleTime.getTime()) || scheduleTime < minTime) {
@@ -812,8 +731,6 @@ async function publishToMeta(targetPost) {
 
         const data = await response.json();
 
-        console.log("schedule response", data);
-
         currentlyScheduling.delete(post.id);
 
         if (data.success) {
@@ -825,22 +742,15 @@ async function publishToMeta(targetPost) {
                 "ok"
             );
 
-            // Remove this post from the queue so we don't double-schedule
-            schedulerQueue = schedulerQueue.filter(
-                p => p.id !== post.id
-            );
-
+            schedulerQueue = schedulerQueue.filter(p => p.id !== post.id);
             renderSchedulerQueue();
-
             loadPosts();
 
         } else {
 
             addAutomationLog(
                 "Schedule failed: " +
-                (typeof data.error === "string"
-                    ? data.error
-                    : JSON.stringify(data.error)),
+                (typeof data.error === "string" ? data.error : JSON.stringify(data.error)),
                 "err"
             );
         }
@@ -848,32 +758,17 @@ async function publishToMeta(targetPost) {
     } catch (error) {
 
         console.log(error);
-
-        addAutomationLog(
-            "Publish error: " + error.message,
-            "err"
-        );
+        addAutomationLog("Publish error: " + error.message, "err");
     }
 }
 
 /* ============================================================
-   AUTO PIPELINE
-   Triggered by SSE every time a new image is generated.
-   1. drop into upload queue
-   2. ⚡ generate-with-groq
-   3. select all FB+IG targets
-   4. custom days → today, current date + time
-   5. 🚀 schedule
+   AUTO PIPELINE (Tampermonkey-style SSE handler)
 ============================================================ */
 
 async function autoScheduleGeneratedPost(post) {
 
-    if (alreadyAutomated.has(post.id)) {
-
-        console.log("skipping already automated", post.id);
-        return;
-    }
-
+    if (alreadyAutomated.has(post.id)) return;
     alreadyAutomated.add(post.id);
 
     try {
@@ -883,29 +778,17 @@ async function autoScheduleGeneratedPost(post) {
             "ok"
         );
 
-        /* ---------- 1. Place in file queue ---------- */
-
         post.title  = post.client + " — auto post";
         post.status = "uploaded";
 
         schedulerQueue.unshift(post);
         renderSchedulerQueue();
 
-        addAutomationLog(
-            "📂 Image placed in upload queue",
-            "info"
-        );
-
-        /* ---------- 2. Generate caption with Groq ---------- */
+        addAutomationLog("📂 Image placed in upload queue", "info");
 
         await generateGroqCaption(post);
 
-        /* ---------- 3. Auto-select ONLY the matching client page ---------- */
-
-        if (!metaTargets.length) {
-
-            await loadMetaTargets();
-        }
+        if (!metaTargets.length) await loadMetaTargets();
 
         const matchedPage = findPageForClient(post.client);
 
@@ -917,20 +800,15 @@ async function autoScheduleGeneratedPost(post) {
                 "err"
             );
 
-            alreadyAutomated.delete(post.id);  // allow retry
+            alreadyAutomated.delete(post.id);
             return;
         }
 
-        // Wipe previous selection, select ONLY this page
         selectedTargets = new Set();
         selectedTargets.add(matchedPage.pageId);
+        if (matchedPage.instagramId) selectedTargets.add(matchedPage.pageId + "_ig");
 
-        if (matchedPage.instagramId) {
-
-            selectedTargets.add(matchedPage.pageId + "_ig");
-        }
-
-        renderTargets();   // re-render tiles with correct .selected class
+        renderTargets();
 
         addAutomationLog(
             `🎯 Selected page: "${matchedPage.pageName}"` +
@@ -938,22 +816,15 @@ async function autoScheduleGeneratedPost(post) {
             "ok"
         );
 
-        /* ---------- 4. Custom days → today + current date/time ---------- */
-
         autoSelectTodayCustomDay();
         autoSelectNowDateTime();
-
-        /* ---------- 5. Fire the schedule for THIS post specifically ---------- */
 
         setTimeout(() => publishToMeta(post), 1500);
 
     } catch (error) {
 
         console.log(error);
-        addAutomationLog(
-            "Auto pipeline error: " + error.message,
-            "err"
-        );
+        addAutomationLog("Auto pipeline error: " + error.message, "err");
     }
 }
 
@@ -964,7 +835,6 @@ async function autoScheduleGeneratedPost(post) {
 function connectSSE() {
 
     if (!window.EventSource) {
-
         setAutoStatus("Your browser does not support SSE", false);
         return;
     }
@@ -972,43 +842,24 @@ function connectSSE() {
     const es = new EventSource("/events");
 
     es.addEventListener("connected", () => {
-
         setAutoStatus("🟢 Connected — waiting for new images…", true);
-
-        addAutomationLog(
-            "Connected to backend automation stream",
-            "ok"
-        );
+        addAutomationLog("Connected to backend automation stream", "ok");
     });
 
     es.addEventListener("new-post", evt => {
-
         try {
-
             const post = JSON.parse(evt.data);
-
             autoScheduleGeneratedPost(post);
-
-        } catch (e) {
-
-            console.log(e);
-        }
+        } catch (e) { console.log(e); }
     });
 
     es.addEventListener("post-scheduled", evt => {
-
         const { postId } = JSON.parse(evt.data);
-
-        addAutomationLog(
-            `Server confirmed scheduling for post ${postId}`,
-            "ok"
-        );
+        addAutomationLog(`Server confirmed scheduling for post ${postId}`, "ok");
     });
 
     es.addEventListener("pipeline-done", evt => {
-
         try {
-
             const log = JSON.parse(evt.data);
             const ok  = log.status === "scheduled";
 
@@ -1021,22 +872,18 @@ function connectSSE() {
             );
 
             if (ok) loadPosts();
-
         } catch (e) { console.log(e); }
     });
 
     es.onerror = () => {
-
         setAutoStatus("🔴 Disconnected — retrying…", false);
-
         setTimeout(connectSSE, 3000);
-
         es.close();
     };
 }
 
 /* ============================================================
-   POSTS LIST (read-only history at bottom of dashboard)
+   POSTS LIST
 ============================================================ */
 
 async function loadPosts() {
@@ -1064,15 +911,8 @@ async function loadPosts() {
               <p>${post.hashtags || ""}</p>
               <p class="status-line ${post.status}">${post.status}</p>
               <div class="schedule-box">
-                <input
-                type="datetime-local"
-                id="time-${post.id}"
-                class="schedule-input"
-                >
-                <button
-                class="schedule-btn"
-                onclick="schedulePost(${post.id})"
-                >
+                <input type="datetime-local" id="time-${post.id}" class="schedule-input">
+                <button class="schedule-btn" onclick="schedulePost(${post.id})">
                   Schedule Manually
                 </button>
               </div>
@@ -1082,7 +922,6 @@ async function loadPosts() {
         });
 
     } catch (e) {
-
         console.log(e);
     }
 }
@@ -1110,17 +949,12 @@ async function schedulePost(id) {
     const data = await res.json();
 
     if (data.success) {
-
         alert("Post scheduled ✓");
         loadPosts();
-
     } else {
-
         alert(
             "Failed: " +
-            (typeof data.error === "string"
-                ? data.error
-                : JSON.stringify(data.error))
+            (typeof data.error === "string" ? data.error : JSON.stringify(data.error))
         );
     }
 }

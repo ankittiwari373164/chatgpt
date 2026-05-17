@@ -38,9 +38,7 @@ app.use(express.json({ limit: "100mb" }));
 app.use(express.static("public"));
 
 /* ============================================================
-   Mongo-required guard — for routes that need a live DB.
-   /health and static files skip this so UptimeRobot can still
-   ping us even if Atlas is sleeping.
+   Mongo-required guard
 ============================================================ */
 
 const { mongoose } = require("./db/connect");
@@ -55,7 +53,7 @@ function requireMongo(req, res, next) {
 }
 
 /* ============================================================
-   SSE — REAL-TIME PUSH TO DASHBOARD
+   SSE
 ============================================================ */
 
 const sseClients = new Set();
@@ -87,19 +85,15 @@ function broadcast(eventName, payload) {
         `data: ${JSON.stringify(payload)}\n\n`;
 
     for (const res of sseClients) {
-
         try { res.write(chunk); } catch (_) {}
     }
 }
 
 /* ============================================================
-   HEALTH — pinged by UptimeRobot every 14 min to keep
-   the Render free instance from sleeping.
+   HEALTH
 ============================================================ */
 
 app.get("/health", (req, res) => {
-
-    const { mongoose } = require("./db/connect");
 
     res.json({
         ok:        true,
@@ -110,7 +104,7 @@ app.get("/health", (req, res) => {
 });
 
 /* ============================================================
-   CURRENT TASK  — Tampermonkey (local) still polls this
+   CURRENT TASK (legacy Tampermonkey support)
 ============================================================ */
 
 app.get("/current-task", requireMongo, async (req, res) => {
@@ -134,10 +128,6 @@ app.get("/current-task", requireMongo, async (req, res) => {
     }
 });
 
-/* ============================================================
-   SAVE PROMPT
-============================================================ */
-
 app.post("/save-prompt", requireMongo, async (req, res) => {
 
     try {
@@ -160,7 +150,7 @@ app.post("/save-prompt", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   SAVE POST — Tampermonkey OR Puppeteer-generated image
+   SAVE POST (Tampermonkey)
 ============================================================ */
 
 async function handleSavePost(req, res) {
@@ -177,8 +167,6 @@ async function handleSavePost(req, res) {
             });
         }
 
-        /* ---------- Upload to Cloudinary ---------- */
-
         let secureUrl = image;
 
         try {
@@ -194,8 +182,6 @@ async function handleSavePost(req, res) {
             console.log("Cloudinary upload failed:", uErr.message);
         }
 
-        /* ---------- Save Post ---------- */
-
         const post = await Post.create({
             _legacyId:    Date.now(),
             client,
@@ -207,8 +193,6 @@ async function handleSavePost(req, res) {
             scheduled:    false,
             source:       source || "tampermonkey"
         });
-
-        /* ---------- Mark Prompt as done ---------- */
 
         await Prompt.updateMany(
             { client, prompt, generated: false },
@@ -228,10 +212,7 @@ async function handleSavePost(req, res) {
 
         broadcast("new-post", payload);
 
-        console.log(
-            "✅ Image saved & broadcast:",
-            secureUrl.slice(0, 80)
-        );
+        console.log("✅ Image saved & broadcast:", secureUrl.slice(0, 80));
 
         res.json({ success: true, post: payload });
 
@@ -246,7 +227,7 @@ app.post("/save-post",            requireMongo, handleSavePost);
 app.post("/save-generated-image", requireMongo, handleSavePost);
 
 /* ============================================================
-   GENERATE CAPTION
+   GENERATE CAPTION (dashboard)
 ============================================================ */
 
 app.post("/generate-caption", requireMongo, async (req, res) => {
@@ -340,7 +321,7 @@ app.get("/clients", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   CONTENT CALENDAR
+   GENERATE CALENDAR — resilient to Groq 429s + bad JSON
 ============================================================ */
 
 app.post("/generate-calendar", requireMongo, async (req, res) => {
@@ -363,23 +344,69 @@ CTA:      ${client.cta}
 
 Start from ${today}.
 
-Return JSON Array ONLY:
+Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
+30 entries:
 
 [ { "date":"YYYY-MM-DD", "event":"", "topic":"", "goal":"" } ]
 `;
 
-        const response = await axios.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            {
-                model: "llama-3.1-8b-instant",
-                messages: [{ role: "user", content: prompt }]
-            },
-            { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` } }
-        );
+        let raw = null;
+        let lastErr;
 
-        let raw = response.data.choices[0].message.content;
-        raw = raw.substring(raw.indexOf("["), raw.lastIndexOf("]") + 1);
-        const calendar = JSON.parse(raw);
+        for (let attempt = 1; attempt <= 4; attempt++) {
+
+            try {
+
+                const response = await axios.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    {
+                        model:       "llama-3.1-8b-instant",
+                        messages:    [{ role: "user", content: prompt }],
+                        temperature: 0.7,
+                        max_tokens:  3000
+                    },
+                    {
+                        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+                        timeout: 60000
+                    }
+                );
+
+                raw = response.data.choices[0].message.content || "";
+                break;
+
+            } catch (err) {
+
+                lastErr = err;
+                const status = err.response?.status;
+
+                if (status === 429 && attempt < 4) {
+
+                    const waitMs = 1500 * Math.pow(2, attempt);
+                    console.log(`/generate-calendar: Groq 429, retrying in ${waitMs}ms`);
+                    await new Promise(r => setTimeout(r, waitMs));
+                    continue;
+                }
+
+                break;
+            }
+        }
+
+        if (!raw) {
+
+            return res.status(503).json({
+                error: "Groq rate-limited (429). Wait a minute and try again.",
+                detail: lastErr?.response?.data || lastErr?.message
+            });
+        }
+
+        const calendar = parseCalendarArray(raw);
+
+        if (!calendar.length) {
+
+            return res.status(502).json({
+                error: "Groq returned an unparseable calendar. Try again."
+            });
+        }
 
         await Calendar.findOneAndUpdate(
             { client: client.name },
@@ -387,20 +414,71 @@ Return JSON Array ONLY:
             { upsert: true, new: true }
         );
 
+        console.log(
+            `📅 Saved calendar for "${client.name}" — ${calendar.length} items`
+        );
+
         res.json(calendar);
 
     } catch (err) {
 
-        console.log(err.message);
-        res.status(500).json({ error: true });
+        console.log("/generate-calendar error:", err.message);
+        res.status(500).json({ error: err.message });
     }
 });
 
+function parseCalendarArray(raw) {
+
+    let txt = String(raw).replace(/```json|```/g, "").trim();
+
+    const start = txt.indexOf("[");
+    const end   = txt.lastIndexOf("]") + 1;
+
+    if (start >= 0 && end > 0) {
+
+        const slice = txt.substring(start, end);
+
+        try { return JSON.parse(slice); } catch (_) {}
+
+        try {
+            return JSON.parse(slice.replace(/[\x00-\x1F\x7F]/g, " "));
+        } catch (_) {}
+    }
+
+    const out = [];
+    const objRe = /\{[^{}]*\}/g;
+    let m;
+    while ((m = objRe.exec(txt)) !== null) {
+
+        try {
+
+            const obj = JSON.parse(
+                m[0].replace(/[\x00-\x1F\x7F]/g, " ")
+            );
+
+            if (obj && (obj.date || obj.topic)) out.push(obj);
+
+        } catch (_) {
+
+            const o = {};
+            const fieldRe = /"(\w+)"\s*:\s*"((?:\\.|[^"\\])*)"/g;
+            let f;
+            while ((f = fieldRe.exec(m[0])) !== null) {
+                o[f[1]] = f[2].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+            }
+
+            if (o.date || o.topic) out.push(o);
+        }
+    }
+
+    return out;
+}
+
 /* ============================================================
-   PROMPT GENERATION
+   PROMPT GENERATION (legacy)
 ============================================================ */
 
-app.post("/generate-prompt", async (req, res) => {
+app.post("/generate-prompt", requireMongo, async (req, res) => {
 
     try {
 
@@ -443,7 +521,7 @@ Return a highly detailed visual prompt for an AI image generator.
 });
 
 /* ============================================================
-   META PAGES — used by dashboard target tiles
+   META PAGES
 ============================================================ */
 
 app.get("/meta/pages", requireMongo, async (req, res) => {
@@ -452,8 +530,6 @@ app.get("/meta/pages", requireMongo, async (req, res) => {
 
         const pages = await getAllMetaPages();
 
-        // Also try a fresh fetch when cache is empty so we can surface
-        // the real underlying error (expired token, etc.)
         if (!pages.length) {
 
             try {
@@ -467,8 +543,7 @@ app.get("/meta/pages", requireMongo, async (req, res) => {
                           refreshErr.message;
 
                 return res.json({
-                    error: `META_ACCESS_TOKEN failed: ${m}. ` +
-                           `Refresh it from Graph API Explorer.`,
+                    error: `META_ACCESS_TOKEN failed: ${m}. Refresh it from Graph API Explorer.`,
                     pages: []
                 });
             }
@@ -519,17 +594,13 @@ app.get("/posts", requireMongo, async (req, res) => {
     })));
 });
 
-/* ============================================================
-   SCHEDULED
-============================================================ */
-
 app.get("/scheduled", requireMongo, async (req, res) => {
 
     res.json(await Scheduled.find().sort({ createdAt: -1 }).limit(200).lean());
 });
 
 /* ============================================================
-   SCHEDULE-POST — main dashboard endpoint
+   SCHEDULE-POST
 ============================================================ */
 
 const inFlightPosts = new Set();
@@ -568,8 +639,6 @@ app.post("/schedule-post", requireMongo, async (req, res) => {
 
         inFlightPosts.add(String(postId));
 
-        /* ---------- Resolve targets ---------- */
-
         let realTargets = [];
 
         if (Array.isArray(targets) && targets.length) {
@@ -580,7 +649,6 @@ app.post("/schedule-post", requireMongo, async (req, res) => {
 
                 const pages = await getAllMetaPages();
                 realTargets = pages;
-                // dashboard tile-string form would only happen for unscoped tests
 
             } else {
 
@@ -600,23 +668,13 @@ app.post("/schedule-post", requireMongo, async (req, res) => {
             });
         }
 
-        console.log(
-            "Resolved targets:",
-            realTargets.map(t => t.pageName)
-        );
-
-        /* ---------- Calculate schedule unix ---------- */
+        console.log("Resolved targets:", realTargets.map(t => t.pageName));
 
         const minSchedule = Math.floor((Date.now() + 11 * 60 * 1000) / 1000);
-
         let unixTime = Math.floor(new Date(scheduleTime).getTime() / 1000);
-
         if (!unixTime || isNaN(unixTime) || unixTime < minSchedule) {
-
             unixTime = minSchedule;
         }
-
-        /* ---------- Loop ---------- */
 
         const results = [];
 
@@ -658,7 +716,7 @@ app.post("/schedule-post", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   CHATGPT COOKIE MGMT  — upload, verify, view
+   COOKIES / DIAGNOSTICS / MANUAL CRON
 ============================================================ */
 
 const COOKIE_AUTH = process.env.ADMIN_TOKEN || "change-me";
@@ -713,6 +771,19 @@ app.get("/chatgpt/test", requireAdmin, async (req, res) => {
     }
 });
 
+app.get("/chatgpt/diag", async (req, res) => {
+
+    try {
+
+        const d = await puppeteerCG.diagnose();
+        res.json(d);
+
+    } catch (err) {
+
+        res.json({ error: err.message });
+    }
+});
+
 app.get("/chatgpt/status", requireMongo, async (req, res) => {
 
     const sess = await Session.findOne({ name: "chatgpt" }).lean();
@@ -724,35 +795,17 @@ app.get("/chatgpt/status", requireMongo, async (req, res) => {
     });
 });
 
-/* ============================================================
-   MANUAL CRON TRIGGER  — useful for testing
-============================================================ */
-
 app.post("/cron/run-now", requireAdmin, async (req, res) => {
 
     res.json({ success: true, message: "Started in background." });
-
     dailyCron.runDailyJob().catch(e => console.log("manual cron fail:", e));
 });
 
 /* ============================================================
-   /generate-and-schedule  — THE FULL PIPELINE IN ONE CALL.
-
-   Used by:
-     - The dashboard "Generate Creative" button on any calendar
-       item
-     - The "🌅 Generate & Schedule for ALL Clients" button
-     - The daily 9 AM IST cron (via dailyCron.runForClient)
-
-   Body: { clientName, item? }
-     - If `item` is missing, the next undone calendar item for
-       the client is used (same logic as the cron).
-
-   Returns: full run log so the dashboard can show what
-   happened (image URL, scheduled status, errors, etc.)
+   /generate-and-schedule  — full pipeline for one client
 ============================================================ */
 
-const runningJobs = new Set(); // clientName values being processed
+const runningJobs = new Set();
 
 app.post("/generate-and-schedule", requireMongo, async (req, res) => {
 
@@ -804,7 +857,6 @@ app.post("/generate-and-schedule", requireMongo, async (req, res) => {
             client, today, pages, { item }
         );
 
-        // Broadcast to dashboard so it can refresh its UI
         broadcast("pipeline-done", log);
 
         res.json({
@@ -814,9 +866,7 @@ app.post("/generate-and-schedule", requireMongo, async (req, res) => {
 
     } catch (err) {
 
-        console.log("/generate-and-schedule error:",
-            err.response?.data || err.message);
-
+        console.log("/generate-and-schedule error:", err.response?.data || err.message);
         res.json({ success: false, error: err.message });
 
     } finally {
@@ -826,9 +876,7 @@ app.post("/generate-and-schedule", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   /generate-all-now  — fires the pipeline for every client,
-   one after another, in the background.
-   The dashboard's "🌅 Generate for All Clients" button.
+   /generate-all-now
 ============================================================ */
 
 let allRunInProgress = false;
@@ -846,8 +894,6 @@ app.post("/generate-all-now", requireMongo, async (req, res) => {
     allRunInProgress = true;
 
     res.json({ success: true, message: "Started in background. Watch the logs." });
-
-    /* ---------- Run in background ---------- */
 
     (async () => {
 
@@ -875,9 +921,7 @@ app.post("/generate-all-now", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   /calendar/:client  — fetch a previously saved calendar.
-   Called by the dashboard on page load so calendars survive
-   refresh.
+   /calendar/:client
 ============================================================ */
 
 app.get("/calendar/:client", requireMongo, async (req, res) => {
@@ -899,13 +943,13 @@ app.get("/calendar/:client", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   /save  — backward compatibility (Tampermonkey old version)
+   /save (legacy)
 ============================================================ */
 
 app.post("/save", requireMongo, handleSavePost);
 
 /* ============================================================
-   BOOT  — connect Mongo, then start cron, then listen
+   BOOT
 ============================================================ */
 
 (async function boot() {
