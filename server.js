@@ -762,8 +762,22 @@ app.get("/chatgpt/test", requireAdmin, async (req, res) => {
 
     try {
 
-        const ok = await puppeteerCG.testLogin();
-        res.json({ success: true, loggedIn: ok });
+        const result = await puppeteerCG.testLogin();
+
+        // New return shape: { loggedIn, detail } — pass through
+        if (result && typeof result === "object" && "loggedIn" in result) {
+
+            res.json({
+                success:  true,
+                loggedIn: result.loggedIn,
+                detail:   result.detail
+            });
+
+        } else {
+
+            // Old shape (just a boolean) — keep compat
+            res.json({ success: true, loggedIn: !!result });
+        }
 
     } catch (err) {
 

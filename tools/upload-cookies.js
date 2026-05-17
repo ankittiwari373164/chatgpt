@@ -97,7 +97,7 @@ require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
             { headers: { "x-admin-token": token }, timeout: 90000 }
         );
 
-        console.log("Login test result:", t.data);
+        console.log("Login test result:", JSON.stringify(t.data, null, 2));
 
     } catch (err) {
 
