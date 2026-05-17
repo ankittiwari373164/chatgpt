@@ -859,19 +859,38 @@ function connectSSE() {
     });
 
     es.addEventListener("pipeline-done", evt => {
+
         try {
+
             const log = JSON.parse(evt.data);
-            const ok  = log.status === "scheduled";
+
+            let icon = "⏭ ";
+            let level = "warn";
+
+            if (log.status === "scheduled") {
+                icon  = "✅";
+                level = "ok";
+            } else if (log.status === "queued") {
+                icon  = "📨";
+                level = "info";
+            } else if (log.status === "failed" || log.status === "error") {
+                icon  = "❌";
+                level = "err";
+            } else if (log.status === "missed-days") {
+                icon  = "⚠";
+                level = "warn";
+            }
 
             addAutomationLog(
-                `${ok ? "✅" : "⏭ "} ${log.client}: ${log.status}` +
+                `${icon} ${log.client}: ${log.status}` +
                 (log.reason ? ` — ${log.reason}` : "") +
                 (log.page   ? ` → ${log.page}`   : "") +
                 (log.imageSource ? ` [${log.imageSource}]` : ""),
-                ok ? "ok" : "warn"
+                level
             );
 
-            if (ok) loadPosts();
+            if (log.status === "scheduled") loadPosts();
+
         } catch (e) { console.log(e); }
     });
 

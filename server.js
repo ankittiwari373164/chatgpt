@@ -160,25 +160,16 @@ async function handleSavePost(req, res) {
         const { image, prompt, client, source } = req.body;
 
         if (!image) {
-
-            return res.status(400).json({
-                success: false,
-                error:   "image is required"
-            });
+            return res.status(400).json({ success: false, error: "image is required" });
         }
 
         let secureUrl = image;
 
         try {
-
-            const upload = await cloudinary.uploader.upload(image, {
-                folder: "ai-content"
-            });
+            const upload = await cloudinary.uploader.upload(image, { folder: "ai-content" });
             secureUrl = upload.secure_url;
             console.log("Uploaded to Cloudinary:", secureUrl);
-
         } catch (uErr) {
-
             console.log("Cloudinary upload failed:", uErr.message);
         }
 
@@ -194,9 +185,22 @@ async function handleSavePost(req, res) {
             source:       source || "tampermonkey"
         });
 
+        // Find queued Prompt + its cron context BEFORE marking it done
+        const queuedPrompt = await Prompt.findOne({
+            client, prompt, generated: false
+        }).lean();
+
+        let cronContext = null;
+        if (queuedPrompt?.error) {
+            try {
+                const parsed = JSON.parse(queuedPrompt.error);
+                cronContext = parsed.cronContext || null;
+            } catch (_) {}
+        }
+
         await Prompt.updateMany(
             { client, prompt, generated: false },
-            { $set: { generated: true, image: secureUrl } }
+            { $set: { generated: true, image: secureUrl, error: "" } }
         );
 
         const payload = {
@@ -211,15 +215,103 @@ async function handleSavePost(req, res) {
         };
 
         broadcast("new-post", payload);
-
         console.log("✅ Image saved & broadcast:", secureUrl.slice(0, 80));
+
+        if (cronContext) {
+            console.log(`🤖 Image came from cron — auto-captioning + scheduling…`);
+
+            (async () => {
+                try {
+                    await autoCaptionAndSchedule(post, cronContext);
+                } catch (e) {
+                    console.log("auto-pipeline error:", e.message);
+                    broadcast("pipeline-done", {
+                        client, status: "failed",
+                        reason: "Auto caption/schedule failed: " + e.message
+                    });
+                }
+            })();
+        }
 
         res.json({ success: true, post: payload });
 
     } catch (err) {
-
         console.log(err);
         res.json({ success: false, error: err.message });
+    }
+}
+
+async function autoCaptionAndSchedule(post, ctx) {
+
+    const client = await Client.findOne({ name: post.client }).lean();
+    if (!client) {
+        broadcast("pipeline-done", {
+            client: post.client, status: "failed",
+            reason: "Client not found in DB after image arrived."
+        });
+        return;
+    }
+
+    let caption = "", hashtags = "";
+    try {
+        const cap = await dailyCron.buildCaption(
+            client,
+            { date: ctx.itemDate, topic: ctx.itemTopic },
+            post.prompt
+        );
+        caption  = cap.caption  || "";
+        hashtags = cap.hashtags || "";
+        post.caption  = caption;
+        post.hashtags = hashtags;
+        await post.save();
+    } catch (e) {
+        console.log("caption generation failed:", e.message);
+    }
+
+    const target = {
+        pageId:          ctx.pageId,
+        pageName:        ctx.pageName,
+        pageAccessToken: ctx.pageAccessToken,
+        instagramId:     ctx.instagramId
+    };
+
+    const unixTime = Math.floor((Date.now() + 11 * 60 * 1000) / 1000);
+
+    const result = await scheduleOnePost(post, target, unixTime);
+    await persistScheduleAttempt(post, target, result, unixTime);
+
+    if (result.fb || result.ig) {
+        post.status       = "scheduled";
+        post.scheduled    = true;
+        post.scheduleTime = new Date(unixTime * 1000).toISOString();
+        await post.save();
+
+        const cal = await Calendar.findOne({ client: client.name });
+        if (cal?.calendar?.length) {
+            const item = cal.calendar.find(x =>
+                x.topic === ctx.itemTopic &&
+                (x.date || "").slice(0, 10) === (ctx.itemDate || "").slice(0, 10)
+            );
+            if (item) {
+                item.done = true;
+                cal.markModified("calendar");
+                await cal.save();
+            }
+        }
+
+        broadcast("pipeline-done", {
+            client: client.name, status: "scheduled",
+            page: ctx.pageName, imageSource: "tampermonkey",
+            fb: result.fb, ig: result.ig
+        });
+
+        console.log(`✅ ${client.name}: scheduled → ${ctx.pageName} [via tampermonkey]`);
+    } else {
+        broadcast("pipeline-done", {
+            client: client.name, status: "failed",
+            page: ctx.pageName, imageSource: "tampermonkey",
+            errors: result.errors
+        });
     }
 }
 
