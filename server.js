@@ -10,7 +10,7 @@ const { connect } = require("./db/connect");
 
 const {
     Client, Prompt, Post, Scheduled, Calendar,
-    Session, MetaPage, RunLog
+    Session, MetaPage, RunLog, Log
 } = require("./db/models");
 
 const {
@@ -38,7 +38,9 @@ app.use(express.json({ limit: "100mb" }));
 app.use(express.static("public"));
 
 /* ============================================================
-   Mongo-required guard
+   Mongo-required guard — for routes that need a live DB.
+   /health and static files skip this so UptimeRobot can still
+   ping us even if Atlas is sleeping.
 ============================================================ */
 
 const { mongoose } = require("./db/connect");
@@ -53,7 +55,7 @@ function requireMongo(req, res, next) {
 }
 
 /* ============================================================
-   SSE
+   SSE — REAL-TIME PUSH TO DASHBOARD
 ============================================================ */
 
 const sseClients = new Set();
@@ -87,13 +89,44 @@ function broadcast(eventName, payload) {
     for (const res of sseClients) {
         try { res.write(chunk); } catch (_) {}
     }
+
+    // Auto-persist meaningful events to the Log collection so they
+    // survive page refreshes.
+    if (eventName === "pipeline-done" && payload && mongoose.connection.readyState === 1) {
+
+        const level =
+            payload.status === "scheduled" ? "ok"
+          : payload.status === "queued"    ? "info"
+          : payload.status === "failed" ||
+            payload.status === "error"     ? "err"
+          : "warn";
+
+        const parts = [
+            (level === "ok"   ? "✅"
+            : level === "info" ? "📨"
+            : level === "err"  ? "❌"
+            : "⏭"),
+            payload.client || "system",
+            "—",
+            payload.status,
+            payload.reason ? "— " + payload.reason : "",
+            payload.page   ? "→ " + payload.page   : "",
+            payload.imageSource ? "[" + payload.imageSource + "]" : ""
+        ].filter(Boolean).join(" ");
+
+        Log.create({ level, message: parts.slice(0, 4000), at: new Date() })
+            .catch(() => {});
+    }
 }
 
 /* ============================================================
-   HEALTH
+   HEALTH — pinged by UptimeRobot every 14 min to keep
+   the Render free instance from sleeping.
 ============================================================ */
 
 app.get("/health", (req, res) => {
+
+    const { mongoose } = require("./db/connect");
 
     res.json({
         ok:        true,
@@ -104,16 +137,19 @@ app.get("/health", (req, res) => {
 });
 
 /* ============================================================
-   CURRENT TASK (legacy Tampermonkey support)
+   CURRENT TASK  — Tampermonkey (local) still polls this
 ============================================================ */
 
 app.get("/current-task", requireMongo, async (req, res) => {
 
     try {
 
-        const LOCK_MS = 5 * 60 * 1000;
+        const LOCK_MS = 5 * 60 * 1000; // a Tampermonkey worker gets 5 min per task
         const expiry  = new Date(Date.now() - LOCK_MS);
 
+        // Find one that's either never been claimed OR whose claim has expired,
+        // AND atomically mark it claimed in the SAME query. This prevents two
+        // pollers from picking up the same task.
         const claimed = await Prompt.findOneAndUpdate(
             {
                 generated: false,
@@ -128,7 +164,7 @@ app.get("/current-task", requireMongo, async (req, res) => {
             },
             {
                 sort: { createdAt: 1 },
-                new:  true
+                new:  true            // return the updated doc
             }
         );
 
@@ -146,6 +182,12 @@ app.get("/current-task", requireMongo, async (req, res) => {
         res.json(null);
     }
 });
+
+/* ============================================================
+   /task/:id/fail  — Tampermonkey calls this if it can't
+   complete the task, so the lock releases immediately instead
+   of waiting for the 5-min timeout.
+============================================================ */
 
 app.post("/task/:id/fail", requireMongo, async (req, res) => {
 
@@ -165,6 +207,10 @@ app.post("/task/:id/fail", requireMongo, async (req, res) => {
         res.json({ ok: false, error: err.message });
     }
 });
+
+/* ============================================================
+   SAVE PROMPT
+============================================================ */
 
 app.post("/save-prompt", requireMongo, async (req, res) => {
 
@@ -188,7 +234,7 @@ app.post("/save-prompt", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   SAVE POST (Tampermonkey)
+   SAVE POST — Tampermonkey OR Puppeteer-generated image
 ============================================================ */
 
 async function handleSavePost(req, res) {
@@ -198,18 +244,31 @@ async function handleSavePost(req, res) {
         const { image, prompt, client, source } = req.body;
 
         if (!image) {
-            return res.status(400).json({ success: false, error: "image is required" });
+
+            return res.status(400).json({
+                success: false,
+                error:   "image is required"
+            });
         }
+
+        /* ---------- Upload to Cloudinary ---------- */
 
         let secureUrl = image;
 
         try {
-            const upload = await cloudinary.uploader.upload(image, { folder: "ai-content" });
+
+            const upload = await cloudinary.uploader.upload(image, {
+                folder: "ai-content"
+            });
             secureUrl = upload.secure_url;
             console.log("Uploaded to Cloudinary:", secureUrl);
+
         } catch (uErr) {
+
             console.log("Cloudinary upload failed:", uErr.message);
         }
+
+        /* ---------- Save Post ---------- */
 
         const post = await Post.create({
             _legacyId:    Date.now(),
@@ -223,22 +282,34 @@ async function handleSavePost(req, res) {
             source:       source || "tampermonkey"
         });
 
-        // Find queued Prompt + its cron context BEFORE marking it done
+        /* ---------- Mark Prompt as done + capture cron context ---------- */
+
+        // Find a matching un-generated prompt and pull its cronContext (if any)
+        // BEFORE marking it generated, so we know whether the cron triggered it.
+
         const queuedPrompt = await Prompt.findOne({
             client, prompt, generated: false
         }).lean();
 
         let cronContext = null;
         if (queuedPrompt?.error) {
+
             try {
+
                 const parsed = JSON.parse(queuedPrompt.error);
                 cronContext = parsed.cronContext || null;
+
             } catch (_) {}
         }
 
         await Prompt.updateMany(
             { client, prompt, generated: false },
-            { $set: { generated: true, image: secureUrl, error: "" } }
+            { $set: {
+                generated: true,
+                image:     secureUrl,
+                // Clear the cronContext stash so we don't reprocess later
+                error:     ""
+            }}
         );
 
         const payload = {
@@ -253,18 +324,34 @@ async function handleSavePost(req, res) {
         };
 
         broadcast("new-post", payload);
-        console.log("✅ Image saved & broadcast:", secureUrl.slice(0, 80));
+
+        console.log(
+            "✅ Image saved & broadcast:",
+            secureUrl.slice(0, 80)
+        );
+
+        /* ---------- Cron-triggered? Auto-caption + auto-schedule ---------- */
 
         if (cronContext) {
-            console.log(`🤖 Image came from cron — auto-captioning + scheduling…`);
 
+            console.log(
+                `🤖 Image came from cron-queued prompt — auto-running ` +
+                `caption + Meta scheduling for ${client}…`
+            );
+
+            // Don't block the HTTP response on this — kick it off async.
             (async () => {
+
                 try {
+
                     await autoCaptionAndSchedule(post, cronContext);
+
                 } catch (e) {
+
                     console.log("auto-pipeline error:", e.message);
                     broadcast("pipeline-done", {
-                        client, status: "failed",
+                        client,
+                        status: "failed",
                         reason: "Auto caption/schedule failed: " + e.message
                     });
                 }
@@ -274,37 +361,58 @@ async function handleSavePost(req, res) {
         res.json({ success: true, post: payload });
 
     } catch (err) {
+
         console.log(err);
         res.json({ success: false, error: err.message });
     }
 }
 
+/* ============================================================
+   Auto-pipeline: when Tampermonkey delivers a cron-queued image,
+   complete the rest of the cron job (caption + Meta scheduling).
+============================================================ */
+
 async function autoCaptionAndSchedule(post, ctx) {
 
+    /* 1. Get the client details */
+
     const client = await Client.findOne({ name: post.client }).lean();
+
     if (!client) {
+
         broadcast("pipeline-done", {
-            client: post.client, status: "failed",
+            client: post.client,
+            status: "failed",
             reason: "Client not found in DB after image arrived."
         });
         return;
     }
 
+    /* 2. Generate caption */
+
     let caption = "", hashtags = "";
+
     try {
+
         const cap = await dailyCron.buildCaption(
             client,
             { date: ctx.itemDate, topic: ctx.itemTopic },
             post.prompt
         );
+
         caption  = cap.caption  || "";
         hashtags = cap.hashtags || "";
+
         post.caption  = caption;
         post.hashtags = hashtags;
         await post.save();
+
     } catch (e) {
+
         console.log("caption generation failed:", e.message);
     }
+
+    /* 3. Schedule to Meta */
 
     const target = {
         pageId:          ctx.pageId,
@@ -316,20 +424,27 @@ async function autoCaptionAndSchedule(post, ctx) {
     const unixTime = Math.floor((Date.now() + 11 * 60 * 1000) / 1000);
 
     const result = await scheduleOnePost(post, target, unixTime);
+
     await persistScheduleAttempt(post, target, result, unixTime);
 
     if (result.fb || result.ig) {
+
         post.status       = "scheduled";
         post.scheduled    = true;
         post.scheduleTime = new Date(unixTime * 1000).toISOString();
         await post.save();
 
+        /* Mark calendar item as done */
+
         const cal = await Calendar.findOne({ client: client.name });
+
         if (cal?.calendar?.length) {
+
             const item = cal.calendar.find(x =>
                 x.topic === ctx.itemTopic &&
                 (x.date || "").slice(0, 10) === (ctx.itemDate || "").slice(0, 10)
             );
+
             if (item) {
                 item.done = true;
                 cal.markModified("calendar");
@@ -338,17 +453,26 @@ async function autoCaptionAndSchedule(post, ctx) {
         }
 
         broadcast("pipeline-done", {
-            client: client.name, status: "scheduled",
-            page: ctx.pageName, imageSource: "tampermonkey",
-            fb: result.fb, ig: result.ig
+            client:      client.name,
+            status:      "scheduled",
+            page:        ctx.pageName,
+            imageSource: "tampermonkey",
+            fb:          result.fb,
+            ig:          result.ig
         });
 
-        console.log(`✅ ${client.name}: scheduled → ${ctx.pageName} [via tampermonkey]`);
+        console.log(
+            `✅ ${client.name}: scheduled → ${ctx.pageName} [via tampermonkey]`
+        );
+
     } else {
+
         broadcast("pipeline-done", {
-            client: client.name, status: "failed",
-            page: ctx.pageName, imageSource: "tampermonkey",
-            errors: result.errors
+            client:      client.name,
+            status:      "failed",
+            page:        ctx.pageName,
+            imageSource: "tampermonkey",
+            errors:      result.errors
         });
     }
 }
@@ -357,7 +481,7 @@ app.post("/save-post",            requireMongo, handleSavePost);
 app.post("/save-generated-image", requireMongo, handleSavePost);
 
 /* ============================================================
-   GENERATE CAPTION (dashboard)
+   GENERATE CAPTION
 ============================================================ */
 
 app.post("/generate-caption", requireMongo, async (req, res) => {
@@ -451,7 +575,121 @@ app.get("/clients", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   GENERATE CALENDAR — resilient to Groq 429s + bad JSON
+   DELETE a client (also cleans up its calendar)
+============================================================ */
+
+app.delete("/clients/:name", requireMongo, async (req, res) => {
+
+    try {
+
+        const name = req.params.name;
+
+        const r1 = await Client.deleteOne({ name });
+        const r2 = await Calendar.deleteMany({ client: name });
+
+        broadcast("client-deleted", { name });
+
+        res.json({
+            success:        true,
+            client:         r1.deletedCount,
+            calendarsWiped: r2.deletedCount
+        });
+
+    } catch (err) {
+
+        res.json({ success: false, error: err.message });
+    }
+});
+
+/* ============================================================
+   PERSISTENT DASHBOARD LOGS
+   Logs survive page refreshes and Render restarts.
+============================================================ */
+
+app.get("/logs", requireMongo, async (req, res) => {
+
+    try {
+
+        const limit = Math.min(parseInt(req.query.limit) || 300, 1000);
+
+        const logs = await Log.find()
+            .sort({ at: -1 })
+            .limit(limit)
+            .lean();
+
+        // Return chronologically (oldest first) so the dashboard
+        // can append them in natural order.
+        res.json(logs.reverse());
+
+    } catch (err) {
+
+        res.json([]);
+    }
+});
+
+app.post("/logs", requireMongo, async (req, res) => {
+
+    try {
+
+        const { message, level } = req.body || {};
+        if (!message) return res.json({ success: false, error: "message required" });
+
+        const doc = await Log.create({
+            level:   level || "info",
+            message: String(message).slice(0, 4000),
+            at:      new Date()
+        });
+
+        broadcast("log", {
+            at:      doc.at,
+            level:   doc.level,
+            message: doc.message
+        });
+
+        res.json({ success: true });
+
+    } catch (err) {
+
+        res.json({ success: false, error: err.message });
+    }
+});
+
+app.post("/logs/clear", requireMongo, async (req, res) => {
+
+    try {
+
+        const r = await Log.deleteMany({});
+        res.json({ success: true, deleted: r.deletedCount });
+
+    } catch (err) {
+
+        res.json({ success: false, error: err.message });
+    }
+});
+
+/* Helper that any server code can call to persist a log line */
+
+async function persistLog(message, level = "info") {
+
+    try {
+
+        const doc = await Log.create({
+            level,
+            message: String(message).slice(0, 4000),
+            at:      new Date()
+        });
+
+        broadcast("log", {
+            at:      doc.at,
+            level:   doc.level,
+            message: doc.message
+        });
+
+    } catch (_) {}
+}
+
+/* ============================================================
+   CONTENT CALENDAR
 ============================================================ */
 
 app.post("/generate-calendar", requireMongo, async (req, res) => {
@@ -480,6 +718,7 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
 [ { "date":"YYYY-MM-DD", "event":"", "topic":"", "goal":"" } ]
 `;
 
+        // Retry on 429s with exponential backoff
         let raw = null;
         let lastErr;
 
@@ -512,7 +751,9 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
                 if (status === 429 && attempt < 4) {
 
                     const waitMs = 1500 * Math.pow(2, attempt);
-                    console.log(`/generate-calendar: Groq 429, retrying in ${waitMs}ms`);
+                    console.log(
+                        `/generate-calendar: Groq 429, retrying in ${waitMs}ms`
+                    );
                     await new Promise(r => setTimeout(r, waitMs));
                     continue;
                 }
@@ -557,10 +798,18 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
     }
 });
 
+/* ============================================================
+   Resilient parser for the Groq calendar response.
+   Falls back to extracting individual {…} objects by regex if
+   the full JSON.parse fails (which it often does because Groq
+   returns unescaped quotes/newlines in topic/goal strings).
+============================================================ */
+
 function parseCalendarArray(raw) {
 
     let txt = String(raw).replace(/```json|```/g, "").trim();
 
+    // Strategy 1: locate the outer [ … ] block and parse
     const start = txt.indexOf("[");
     const end   = txt.lastIndexOf("]") + 1;
 
@@ -575,6 +824,7 @@ function parseCalendarArray(raw) {
         } catch (_) {}
     }
 
+    // Strategy 2: pull out each {…} block individually
     const out = [];
     const objRe = /\{[^{}]*\}/g;
     let m;
@@ -590,6 +840,7 @@ function parseCalendarArray(raw) {
 
         } catch (_) {
 
+            // Strategy 3 for this single object: extract fields by regex
             const o = {};
             const fieldRe = /"(\w+)"\s*:\s*"((?:\\.|[^"\\])*)"/g;
             let f;
@@ -605,10 +856,10 @@ function parseCalendarArray(raw) {
 }
 
 /* ============================================================
-   PROMPT GENERATION (legacy)
+   PROMPT GENERATION
 ============================================================ */
 
-app.post("/generate-prompt", requireMongo, async (req, res) => {
+app.post("/generate-prompt", async (req, res) => {
 
     try {
 
@@ -651,7 +902,7 @@ Return a highly detailed visual prompt for an AI image generator.
 });
 
 /* ============================================================
-   META PAGES
+   META PAGES — used by dashboard target tiles
 ============================================================ */
 
 app.get("/meta/pages", requireMongo, async (req, res) => {
@@ -660,6 +911,8 @@ app.get("/meta/pages", requireMongo, async (req, res) => {
 
         const pages = await getAllMetaPages();
 
+        // Also try a fresh fetch when cache is empty so we can surface
+        // the real underlying error (expired token, etc.)
         if (!pages.length) {
 
             try {
@@ -673,7 +926,8 @@ app.get("/meta/pages", requireMongo, async (req, res) => {
                           refreshErr.message;
 
                 return res.json({
-                    error: `META_ACCESS_TOKEN failed: ${m}. Refresh it from Graph API Explorer.`,
+                    error: `META_ACCESS_TOKEN failed: ${m}. ` +
+                           `Refresh it from Graph API Explorer.`,
                     pages: []
                 });
             }
@@ -692,11 +946,46 @@ app.post("/meta/refresh-pages", requireMongo, async (req, res) => {
 
     try {
 
-        const pages = await refreshMetaPages();
-        res.json({ success: true, count: pages.length });
+        // Accept a fresh token from the dashboard
+        const token = (req.body && req.body.token) ? String(req.body.token).trim() : null;
+
+        const pages = await refreshMetaPages(token);
+
+        res.json({
+            success: true,
+            count:   pages.length,
+            tokenSaved: !!token
+        });
 
     } catch (err) {
 
+        const msg = err.response?.data?.error?.message ||
+                    err.response?.data?.error_description ||
+                    err.message;
+
+        const code = err.response?.data?.error?.code;
+
+        res.status(400).json({
+            success: false,
+            error:   msg,
+            code,
+            hint:    code === 190 || /OAuth|expired|invalid/i.test(msg)
+                       ? "Token is invalid or expired. Get a fresh one from Graph API Explorer."
+                       : null
+        });
+    }
+});
+
+/* ============================================================
+   /meta/delete-pages — clear all stored pages
+============================================================ */
+
+app.post("/meta/delete-pages", requireMongo, async (req, res) => {
+
+    try {
+        await MetaPage.deleteMany({});
+        res.json({ success: true });
+    } catch (err) {
         res.json({ success: false, error: err.message });
     }
 });
@@ -724,13 +1013,17 @@ app.get("/posts", requireMongo, async (req, res) => {
     })));
 });
 
+/* ============================================================
+   SCHEDULED
+============================================================ */
+
 app.get("/scheduled", requireMongo, async (req, res) => {
 
     res.json(await Scheduled.find().sort({ createdAt: -1 }).limit(200).lean());
 });
 
 /* ============================================================
-   SCHEDULE-POST
+   SCHEDULE-POST — main dashboard endpoint
 ============================================================ */
 
 const inFlightPosts = new Set();
@@ -769,6 +1062,8 @@ app.post("/schedule-post", requireMongo, async (req, res) => {
 
         inFlightPosts.add(String(postId));
 
+        /* ---------- Resolve targets ---------- */
+
         let realTargets = [];
 
         if (Array.isArray(targets) && targets.length) {
@@ -779,6 +1074,7 @@ app.post("/schedule-post", requireMongo, async (req, res) => {
 
                 const pages = await getAllMetaPages();
                 realTargets = pages;
+                // dashboard tile-string form would only happen for unscoped tests
 
             } else {
 
@@ -798,13 +1094,23 @@ app.post("/schedule-post", requireMongo, async (req, res) => {
             });
         }
 
-        console.log("Resolved targets:", realTargets.map(t => t.pageName));
+        console.log(
+            "Resolved targets:",
+            realTargets.map(t => t.pageName)
+        );
+
+        /* ---------- Calculate schedule unix ---------- */
 
         const minSchedule = Math.floor((Date.now() + 11 * 60 * 1000) / 1000);
+
         let unixTime = Math.floor(new Date(scheduleTime).getTime() / 1000);
+
         if (!unixTime || isNaN(unixTime) || unixTime < minSchedule) {
+
             unixTime = minSchedule;
         }
+
+        /* ---------- Loop ---------- */
 
         const results = [];
 
@@ -846,7 +1152,7 @@ app.post("/schedule-post", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   COOKIES / DIAGNOSTICS / MANUAL CRON
+   CHATGPT COOKIE MGMT  — upload, verify, view
 ============================================================ */
 
 const COOKIE_AUTH = process.env.ADMIN_TOKEN || "change-me";
@@ -939,17 +1245,35 @@ app.get("/chatgpt/status", requireMongo, async (req, res) => {
     });
 });
 
+/* ============================================================
+   MANUAL CRON TRIGGER  — useful for testing
+============================================================ */
+
 app.post("/cron/run-now", requireAdmin, async (req, res) => {
 
     res.json({ success: true, message: "Started in background." });
+
     dailyCron.runDailyJob().catch(e => console.log("manual cron fail:", e));
 });
 
 /* ============================================================
-   /generate-and-schedule  — full pipeline for one client
+   /generate-and-schedule  — THE FULL PIPELINE IN ONE CALL.
+
+   Used by:
+     - The dashboard "Generate Creative" button on any calendar
+       item
+     - The "🌅 Generate & Schedule for ALL Clients" button
+     - The daily 9 AM IST cron (via dailyCron.runForClient)
+
+   Body: { clientName, item? }
+     - If `item` is missing, the next undone calendar item for
+       the client is used (same logic as the cron).
+
+   Returns: full run log so the dashboard can show what
+   happened (image URL, scheduled status, errors, etc.)
 ============================================================ */
 
-const runningJobs = new Set();
+const runningJobs = new Set(); // clientName values being processed
 
 app.post("/generate-and-schedule", requireMongo, async (req, res) => {
 
@@ -1001,6 +1325,7 @@ app.post("/generate-and-schedule", requireMongo, async (req, res) => {
             client, today, pages, { item }
         );
 
+        // Broadcast to dashboard so it can refresh its UI
         broadcast("pipeline-done", log);
 
         res.json({
@@ -1010,7 +1335,9 @@ app.post("/generate-and-schedule", requireMongo, async (req, res) => {
 
     } catch (err) {
 
-        console.log("/generate-and-schedule error:", err.response?.data || err.message);
+        console.log("/generate-and-schedule error:",
+            err.response?.data || err.message);
+
         res.json({ success: false, error: err.message });
 
     } finally {
@@ -1020,7 +1347,9 @@ app.post("/generate-and-schedule", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   /generate-all-now
+   /generate-all-now  — fires the pipeline for every client,
+   one after another, in the background.
+   The dashboard's "🌅 Generate for All Clients" button.
 ============================================================ */
 
 let allRunInProgress = false;
@@ -1038,6 +1367,8 @@ app.post("/generate-all-now", requireMongo, async (req, res) => {
     allRunInProgress = true;
 
     res.json({ success: true, message: "Started in background. Watch the logs." });
+
+    /* ---------- Run in background ---------- */
 
     (async () => {
 
@@ -1065,7 +1396,9 @@ app.post("/generate-all-now", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   /calendar/:client
+   /calendar/:client  — fetch a previously saved calendar.
+   Called by the dashboard on page load so calendars survive
+   refresh.
 ============================================================ */
 
 app.get("/calendar/:client", requireMongo, async (req, res) => {
@@ -1087,13 +1420,13 @@ app.get("/calendar/:client", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   /save (legacy)
+   /save  — backward compatibility (Tampermonkey old version)
 ============================================================ */
 
 app.post("/save", requireMongo, handleSavePost);
 
 /* ============================================================
-   BOOT
+   BOOT  — connect Mongo, run startup health checks, start cron
 ============================================================ */
 
 (async function boot() {
@@ -1102,6 +1435,9 @@ app.post("/save", requireMongo, handleSavePost);
 
         await connect();
         dailyCron.start();
+
+        // ── Startup health checks (non-blocking) ──
+        setTimeout(runStartupChecks, 3000);
 
     } catch (err) {
 
@@ -1118,6 +1454,127 @@ app.post("/save", requireMongo, handleSavePost);
     ));
 
 })();
+
+/* ============================================================
+   STARTUP HEALTH CHECKS
+   1. Was yesterday's cron skipped? (PC was off / power cut)
+   2. Are the ChatGPT cookies still valid?
+============================================================ */
+
+async function runStartupChecks() {
+
+    if (mongoose.connection.readyState !== 1) return;
+
+    console.log("\n🩺 Running startup health checks…");
+
+    /* ---------- 1. Did we miss yesterday's cron? ---------- */
+
+    try {
+
+        const todayIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000)
+            .toISOString().slice(0, 10);
+
+        const last = await RunLog.findOne({ type: "daily-cron" })
+            .sort({ runAt: -1 }).lean();
+
+        if (!last) {
+
+            console.log("   ⓘ  No previous cron run on record yet.");
+
+        } else {
+
+            const lastRunIST = new Date(
+                new Date(last.runAt).getTime() + 5.5 * 60 * 60 * 1000
+            ).toISOString().slice(0, 10);
+
+            const daysSince = Math.floor(
+                (new Date(todayIST) - new Date(lastRunIST)) /
+                (24 * 60 * 60 * 1000)
+            );
+
+            if (daysSince === 0) {
+
+                console.log("   ✓ Today's cron already ran.");
+
+            } else if (daysSince === 1) {
+
+                console.log(
+                    "   ⓘ  Last cron was yesterday — normal if it's before 9 AM."
+                );
+
+            } else {
+
+                console.log(
+                    `   ⚠  Last cron was ${daysSince} days ago — possible missed run(s).\n` +
+                    "       Hit \"🌅 Generate & Schedule for ALL Clients\" on the\n" +
+                    "       dashboard to catch up if needed."
+                );
+
+                broadcast("pipeline-done", {
+                    client: "system",
+                    status: "missed-days",
+                    reason:
+                        `${daysSince} day(s) since last cron run. ` +
+                        "Click the morning button to catch up."
+                });
+            }
+        }
+
+    } catch (err) {
+
+        console.log("   missed-day check failed:", err.message);
+    }
+
+    /* ---------- 2. Check ChatGPT cookies (engine=puppeteer) ---------- */
+
+    if ((process.env.IMAGE_ENGINE || "").toLowerCase() !== "puppeteer") {
+
+        console.log(
+            `   ⓘ  IMAGE_ENGINE=${process.env.IMAGE_ENGINE || "(default)"} — ` +
+            "skipping cookie check."
+        );
+        return;
+    }
+
+    try {
+
+        const sess = await Session.findOne({ name: "chatgpt" }).lean();
+
+        if (!sess?.cookies?.length) {
+
+            console.log(
+                "   ⚠  No ChatGPT cookies stored. Run:\n" +
+                "       node tools/upload-cookies.js cookies.json"
+            );
+            return;
+        }
+
+        const ageDays = Math.floor(
+            (Date.now() - new Date(sess.updatedAt).getTime()) /
+            (24 * 60 * 60 * 1000)
+        );
+
+        if (ageDays >= 14) {
+
+            console.log(
+                `   ⚠  ChatGPT cookies are ${ageDays} days old — may expire soon.\n` +
+                "       Re-export from Cookie-Editor + re-upload to be safe."
+            );
+
+        } else {
+
+            console.log(
+                `   ✓ ChatGPT cookies in DB (${sess.cookies.length} cookies, ${ageDays}d old).`
+            );
+        }
+
+    } catch (err) {
+
+        console.log("   cookie check failed:", err.message);
+    }
+
+    console.log("");
+}
 
 process.on("SIGTERM", async () => {
 

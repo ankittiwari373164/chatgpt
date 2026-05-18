@@ -2,20 +2,26 @@
    STATE
 ============================================================ */
 
-let schedulerQueue   = [];
-let metaTargets      = [];
-let selectedTargets  = new Set();
-let alreadyAutomated = new Set();
-let currentFreq      = "custom";
+let schedulerQueue = [];   // posts currently displayed in file-queue
+let metaTargets    = [];   // pages fetched from /meta/pages
+let selectedTargets = new Set();  // pageId strings selected
+let alreadyAutomated = new Set(); // post.id we've already auto-pushed
+let currentFreq = "custom";
 
 /* ============================================================
    AUTOMATION LOG
 ============================================================ */
 
-function addAutomationLog(message, type = "info") {
+function addAutomationLog(message, type = "info", when = null) {
 
     const log = document.getElementById("automationLogs");
+
     if (!log) return;
+
+    // First call clears any placeholder text
+    if (log.querySelector(".empty-state") || log.textContent.trim() === "Loading…") {
+        log.innerHTML = "";
+    }
 
     const colors = {
         info: "log-info",
@@ -24,7 +30,8 @@ function addAutomationLog(message, type = "info") {
         err:  "log-err"
     };
 
-    const time = new Date().toLocaleTimeString();
+    const t = (when instanceof Date && !isNaN(when.getTime())) ? when : new Date();
+    const time = t.toLocaleTimeString();
 
     const div = document.createElement("div");
     div.className = colors[type] || "log-info";
@@ -61,18 +68,101 @@ async function loadClients() {
 
         clients.forEach(client => {
 
-            select.innerHTML += `<option>${client.name}</option>`;
+            select.innerHTML +=
+                `<option>${client.name}</option>`;
         });
 
         window.clientsData = clients;
 
         select.onchange = loadSavedCalendar;
-
         if (clients.length) loadSavedCalendar();
+
+        renderClientsList(clients);
 
     } catch (e) {
 
         console.log(e);
+    }
+}
+
+function renderClientsList(clients) {
+
+    let box = document.getElementById("clientsListBox");
+
+    if (!box) {
+
+        // Inject the list container right after the Create-Client section
+        const allSections = document.querySelectorAll(".section");
+        let target = null;
+        for (const s of allSections) {
+            if (s.querySelector('input#name')) { target = s; break; }
+        }
+        if (!target) return;
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "section";
+        wrapper.innerHTML = `
+            <h2>📋 Your Clients</h2>
+            <p class="subtext">All saved brands. Click 🗑 to remove (the calendar is also deleted, but past posts stay).</p>
+            <div id="clientsListBox"></div>
+        `;
+        target.parentNode.insertBefore(wrapper, target.nextSibling);
+        box = document.getElementById("clientsListBox");
+    }
+
+    if (!clients.length) {
+        box.innerHTML = '<div class="empty-state">No clients yet — add one above.</div>';
+        return;
+    }
+
+    box.innerHTML = clients.map(c => `
+        <div style="display:flex; justify-content:space-between; align-items:center;
+                    padding:10px 14px; background:#161616; border:1px solid #2a2a2a;
+                    border-radius:8px; margin-bottom:6px;">
+            <div>
+                <div style="font-weight:600;">${escapeHTML(c.name)}</div>
+                <div style="font-size:12px; color:#888;">
+                    ${escapeHTML(c.industry || "")}
+                    ${c.tone ? "· " + escapeHTML(c.tone) : ""}
+                </div>
+            </div>
+            <button
+                onclick="deleteClient('${encodeURIComponent(c.name).replace(/'/g, "\\'")}')"
+                style="background:#3a1010; border:1px solid #5a2020; color:#ffaaaa;
+                       padding:6px 10px; border-radius:6px; cursor:pointer;">
+                🗑 Delete
+            </button>
+        </div>
+    `).join("");
+}
+
+function escapeHTML(s) {
+    return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function deleteClient(encodedName) {
+
+    const name = decodeURIComponent(encodedName);
+
+    if (!confirm(`Delete client "${name}"?\n\nThe brand and its content calendar will be removed.\nPast scheduled posts stay intact.`)) {
+        return;
+    }
+
+    try {
+        const r = await fetch("/clients/" + encodeURIComponent(name), {
+            method: "DELETE"
+        });
+        const d = await r.json();
+
+        if (d.success) {
+            addAutomationLog(`🗑 Deleted client "${name}"`, "warn");
+            loadClients();
+        } else {
+            addAutomationLog(`❌ Delete failed: ${d.error}`, "err");
+        }
+    } catch (e) {
+        addAutomationLog(`❌ Delete failed: ${e.message}`, "err");
     }
 }
 
@@ -130,6 +220,7 @@ async function generateCalendar() {
 
         const data = await response.json();
 
+        // Server may return either a calendar array OR {error: "..."}
         if (!response.ok || !Array.isArray(data)) {
 
             const msg = data?.error || ("HTTP " + response.status);
@@ -140,6 +231,8 @@ async function generateCalendar() {
                 "err"
             );
 
+            // Still try to load any previously saved calendar so
+            // the user sees something instead of an empty screen.
             await loadSavedCalendar();
             return;
         }
@@ -156,6 +249,11 @@ async function generateCalendar() {
         addAutomationLog("Calendar failed: " + err.message, "err");
     }
 }
+
+/* ============================================================
+   Re-render a calendar (used both after generateCalendar()
+   and on page-load when fetching a saved calendar)
+============================================================ */
 
 function renderCalendar(client, calendar) {
 
@@ -197,6 +295,10 @@ function renderCalendar(client, calendar) {
         box.appendChild(card);
     });
 }
+
+/* ============================================================
+   Load a previously saved calendar from the server
+============================================================ */
 
 async function loadSavedCalendar() {
 
@@ -286,6 +388,10 @@ async function generateCreative(client, item, btn) {
     }
 }
 
+/* ============================================================
+   GENERATE FOR ALL CLIENTS (manual morning button)
+============================================================ */
+
 async function generateForAllClients() {
 
     if (!confirm(
@@ -307,7 +413,8 @@ async function generateForAllClients() {
         if (d.success) {
 
             addAutomationLog(
-                "✅ Background run started. Check the logs below as each client completes.",
+                "✅ Background run started. Check the logs below as each " +
+                "client completes.",
                 "ok"
             );
 
@@ -322,6 +429,7 @@ async function generateForAllClients() {
 
     } finally {
 
+        // Keep button disabled for 60s — background run takes a while
         setTimeout(() => {
 
             if (btn) {
@@ -344,6 +452,7 @@ async function loadMetaTargets() {
         const response = await fetch("/meta/pages");
         const data     = await response.json();
 
+        // Server returns either an array OR {error, pages: []}
         if (Array.isArray(data)) {
 
             metaTargets = data;
@@ -354,7 +463,9 @@ async function loadMetaTargets() {
 
             if (data.error) {
 
-                document.getElementById("targetsHelp").textContent = "⚠ " + data.error;
+                document.getElementById("targetsHelp").textContent =
+                    "⚠ " + data.error;
+
                 addAutomationLog(data.error, "err");
                 return;
             }
@@ -424,7 +535,16 @@ function renderTargets() {
     });
 }
 
+/* ============================================================
+   CLIENT → PAGE MATCHING
+   Fuzzy-match a client name against Meta pages, e.g.
+     "Manofox"          → "Manofox Pvt."
+     "Sehatfull"        → "Sehatfull Foods"
+     "Bon Shubharambh"  → "Bon Shubharambh Play School and Day Care"
+============================================================ */
+
 function normalizeName(s) {
+
     return (s || "")
         .toLowerCase()
         .replace(/\b(pvt|ltd|llp|inc|co|company)\.?\b/g, "")
@@ -439,19 +559,32 @@ function findPageForClient(clientName) {
     const target = normalizeName(clientName);
     if (!target) return null;
 
-    let hit = metaTargets.find(p => normalizeName(p.pageName) === target);
+    // 1. exact normalized match
+    let hit = metaTargets.find(
+        p => normalizeName(p.pageName) === target
+    );
     if (hit) return hit;
 
-    hit = metaTargets.find(p => normalizeName(p.pageName).startsWith(target));
+    // 2. page name STARTS WITH client name  (Manofox → Manofox Pvt.)
+    hit = metaTargets.find(p =>
+        normalizeName(p.pageName).startsWith(target)
+    );
     if (hit) return hit;
 
-    hit = metaTargets.find(p => target.startsWith(normalizeName(p.pageName)));
+    // 3. client name STARTS WITH page name
+    hit = metaTargets.find(p =>
+        target.startsWith(normalizeName(p.pageName))
+    );
     if (hit) return hit;
 
+    // 4. token overlap — at least one word in common, score = #common tokens
     const cTokens = new Set(target.split(" ").filter(Boolean));
-    let best = null, bestScore = 0;
+
+    let best = null;
+    let bestScore = 0;
 
     for (const p of metaTargets) {
+
         const pTokens = normalizeName(p.pageName).split(" ").filter(Boolean);
         let score = 0;
         for (const t of pTokens) if (cTokens.has(t)) score++;
@@ -474,6 +607,7 @@ function toggleTargetTile(tile, key) {
 
 function getSelectedTargets() {
 
+    // Build the array the backend expects
     const out = [];
 
     metaTargets.forEach(page => {
@@ -511,10 +645,12 @@ function selectFreq(btn) {
 }
 
 function toggleDay(el) {
+
     el.classList.toggle("selected");
 }
 
 function getSelectedDays() {
+
     return Array.from(
         document.querySelectorAll(".day-pill.selected")
     ).map(d => d.dataset.d);
@@ -522,35 +658,55 @@ function getSelectedDays() {
 
 function autoSelectTodayCustomDay() {
 
+    // Switch frequency to "Custom Days"
     document.querySelectorAll(".freq-opt").forEach(b => {
-        b.classList.toggle("active", b.dataset.freq === "custom");
+
+        b.classList.toggle(
+            "active",
+            b.dataset.freq === "custom"
+        );
     });
 
     currentFreq = "custom";
     document.getElementById("daysWrap").style.display = "";
 
-    const todayName = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][new Date().getDay()];
+    // Today's short name
+    const todayName = [
+        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+    ][new Date().getDay()];
 
     document.querySelectorAll(".day-pill").forEach(p => {
-        p.classList.toggle("selected", p.dataset.d === todayName);
+
+        p.classList.toggle(
+            "selected",
+            p.dataset.d === todayName
+        );
     });
 
-    addAutomationLog(`📅 Custom Day → ${todayName} (today)`, "info");
+    addAutomationLog(
+        `📅 Custom Day → ${todayName} (today)`,
+        "info"
+    );
 }
 
 function autoSelectNowDateTime() {
 
-    const now  = new Date();
+    const now = new Date();
+
     const yyyy = now.getFullYear();
     const mm   = String(now.getMonth() + 1).padStart(2, "0");
     const dd   = String(now.getDate()).padStart(2, "0");
-    const hh   = String(now.getHours()).padStart(2, "0");
-    const mi   = String(now.getMinutes()).padStart(2, "0");
+
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mi = String(now.getMinutes()).padStart(2, "0");
 
     document.getElementById("schStartDate").value = `${yyyy}-${mm}-${dd}`;
     document.getElementById("schTime").value      = `${hh}:${mi}`;
 
-    addAutomationLog(`⏰ Date ${yyyy}-${mm}-${dd}, Time ${hh}:${mi}`, "info");
+    addAutomationLog(
+        `⏰ Date ${yyyy}-${mm}-${dd}, Time ${hh}:${mi}`,
+        "info"
+    );
 }
 
 /* ============================================================
@@ -563,6 +719,7 @@ function renderSchedulerQueue() {
     if (!container) return;
 
     if (!schedulerQueue.length) {
+
         container.innerHTML =
             `<div class="empty-state">No generated images yet</div>`;
         return;
@@ -576,7 +733,10 @@ function renderSchedulerQueue() {
         item.className = `file-item status-${post.status || "ready"}`;
 
         item.innerHTML = `
-          <img src="${post.image}" class="file-thumb">
+          <img
+          src="${post.image}"
+          class="file-thumb"
+          >
           <div class="file-info">
             <div class="file-name">${post.title || post.client || "Post"}</div>
             <div class="file-meta">${post.caption ? post.caption.slice(0, 100) : (post.prompt || "").slice(0, 100)}…</div>
@@ -624,13 +784,22 @@ async function generateGroqCaption(post) {
 
         renderSchedulerQueue();
 
-        addAutomationLog("✅ Groq caption generated", "ok");
+        addAutomationLog(
+            "✅ Groq caption generated",
+            "ok"
+        );
+
         return result;
 
     } catch (error) {
 
         console.log(error);
-        addAutomationLog("Groq error: " + error.message, "err");
+
+        addAutomationLog(
+            "Groq error: " + error.message,
+            "err"
+        );
+
         post.status = "failed";
         renderSchedulerQueue();
     }
@@ -641,6 +810,7 @@ async function manualGenerateAllCaptions() {
     for (const post of schedulerQueue) {
 
         if (post.status !== "ready") {
+
             await generateGroqCaption(post);
         }
     }
@@ -648,10 +818,12 @@ async function manualGenerateAllCaptions() {
 
 /* ============================================================
    PUBLISH TO META
+   Accepts an optional `targetPost` — if not given, defaults to the
+   first post in the scheduler queue (manual-button behaviour).
 ============================================================ */
 
-const currentlyScheduling = new Set();
-const fullyScheduled      = new Set();
+const currentlyScheduling = new Set(); // post.id values being sent
+const fullyScheduled      = new Set(); // post.id values already done
 
 async function publishToMeta(targetPost) {
 
@@ -660,11 +832,13 @@ async function publishToMeta(targetPost) {
         const post = targetPost || schedulerQueue[0];
 
         if (!post) {
+
             addAutomationLog("No queued post found", "err");
             return;
         }
 
         if (fullyScheduled.has(post.id)) {
+
             addAutomationLog(
                 `⏭ Post for "${post.client}" was already scheduled — skipping.`,
                 "warn"
@@ -673,6 +847,7 @@ async function publishToMeta(targetPost) {
         }
 
         if (currentlyScheduling.has(post.id)) {
+
             addAutomationLog(
                 `⏳ Post for "${post.client}" is still being scheduled — skipping duplicate.`,
                 "warn"
@@ -681,6 +856,7 @@ async function publishToMeta(targetPost) {
         }
 
         if (post.status !== "ready") {
+
             addAutomationLog(
                 `Post for "${post.client}" not ready — generate caption first.`,
                 "warn"
@@ -691,6 +867,7 @@ async function publishToMeta(targetPost) {
         const targets = getSelectedTargets();
 
         if (!targets.length) {
+
             addAutomationLog(
                 "No targets selected — select FB / IG tiles.",
                 "err"
@@ -698,17 +875,23 @@ async function publishToMeta(targetPost) {
             return;
         }
 
+        // Build schedule time from date + time inputs
         const dateVal = document.getElementById("schStartDate").value;
         const timeVal = document.getElementById("schTime").value;
 
         let scheduleTime;
 
         if (dateVal && timeVal) {
+
             scheduleTime = new Date(`${dateVal}T${timeVal}`);
+
         } else {
+
             scheduleTime = new Date();
         }
 
+        // Facebook requires scheduled_publish_time to be ≥10 min in the
+        // future. Bump to 11 min if user picked "now" or a past time.
         const minTime = new Date(Date.now() + 11 * 60 * 1000);
 
         if (isNaN(scheduleTime.getTime()) || scheduleTime < minTime) {
@@ -741,6 +924,8 @@ async function publishToMeta(targetPost) {
 
         const data = await response.json();
 
+        console.log("schedule response", data);
+
         currentlyScheduling.delete(post.id);
 
         if (data.success) {
@@ -752,15 +937,22 @@ async function publishToMeta(targetPost) {
                 "ok"
             );
 
-            schedulerQueue = schedulerQueue.filter(p => p.id !== post.id);
+            // Remove this post from the queue so we don't double-schedule
+            schedulerQueue = schedulerQueue.filter(
+                p => p.id !== post.id
+            );
+
             renderSchedulerQueue();
+
             loadPosts();
 
         } else {
 
             addAutomationLog(
                 "Schedule failed: " +
-                (typeof data.error === "string" ? data.error : JSON.stringify(data.error)),
+                (typeof data.error === "string"
+                    ? data.error
+                    : JSON.stringify(data.error)),
                 "err"
             );
         }
@@ -768,17 +960,32 @@ async function publishToMeta(targetPost) {
     } catch (error) {
 
         console.log(error);
-        addAutomationLog("Publish error: " + error.message, "err");
+
+        addAutomationLog(
+            "Publish error: " + error.message,
+            "err"
+        );
     }
 }
 
 /* ============================================================
-   AUTO PIPELINE (Tampermonkey-style SSE handler)
+   AUTO PIPELINE
+   Triggered by SSE every time a new image is generated.
+   1. drop into upload queue
+   2. ⚡ generate-with-groq
+   3. select all FB+IG targets
+   4. custom days → today, current date + time
+   5. 🚀 schedule
 ============================================================ */
 
 async function autoScheduleGeneratedPost(post) {
 
-    if (alreadyAutomated.has(post.id)) return;
+    if (alreadyAutomated.has(post.id)) {
+
+        console.log("skipping already automated", post.id);
+        return;
+    }
+
     alreadyAutomated.add(post.id);
 
     try {
@@ -788,17 +995,29 @@ async function autoScheduleGeneratedPost(post) {
             "ok"
         );
 
+        /* ---------- 1. Place in file queue ---------- */
+
         post.title  = post.client + " — auto post";
         post.status = "uploaded";
 
         schedulerQueue.unshift(post);
         renderSchedulerQueue();
 
-        addAutomationLog("📂 Image placed in upload queue", "info");
+        addAutomationLog(
+            "📂 Image placed in upload queue",
+            "info"
+        );
+
+        /* ---------- 2. Generate caption with Groq ---------- */
 
         await generateGroqCaption(post);
 
-        if (!metaTargets.length) await loadMetaTargets();
+        /* ---------- 3. Auto-select ONLY the matching client page ---------- */
+
+        if (!metaTargets.length) {
+
+            await loadMetaTargets();
+        }
 
         const matchedPage = findPageForClient(post.client);
 
@@ -810,15 +1029,20 @@ async function autoScheduleGeneratedPost(post) {
                 "err"
             );
 
-            alreadyAutomated.delete(post.id);
+            alreadyAutomated.delete(post.id);  // allow retry
             return;
         }
 
+        // Wipe previous selection, select ONLY this page
         selectedTargets = new Set();
         selectedTargets.add(matchedPage.pageId);
-        if (matchedPage.instagramId) selectedTargets.add(matchedPage.pageId + "_ig");
 
-        renderTargets();
+        if (matchedPage.instagramId) {
+
+            selectedTargets.add(matchedPage.pageId + "_ig");
+        }
+
+        renderTargets();   // re-render tiles with correct .selected class
 
         addAutomationLog(
             `🎯 Selected page: "${matchedPage.pageName}"` +
@@ -826,15 +1050,22 @@ async function autoScheduleGeneratedPost(post) {
             "ok"
         );
 
+        /* ---------- 4. Custom days → today + current date/time ---------- */
+
         autoSelectTodayCustomDay();
         autoSelectNowDateTime();
+
+        /* ---------- 5. Fire the schedule for THIS post specifically ---------- */
 
         setTimeout(() => publishToMeta(post), 1500);
 
     } catch (error) {
 
         console.log(error);
-        addAutomationLog("Auto pipeline error: " + error.message, "err");
+        addAutomationLog(
+            "Auto pipeline error: " + error.message,
+            "err"
+        );
     }
 }
 
@@ -845,6 +1076,7 @@ async function autoScheduleGeneratedPost(post) {
 function connectSSE() {
 
     if (!window.EventSource) {
+
         setAutoStatus("Your browser does not support SSE", false);
         return;
     }
@@ -852,20 +1084,58 @@ function connectSSE() {
     const es = new EventSource("/events");
 
     es.addEventListener("connected", () => {
+
         setAutoStatus("🟢 Connected — waiting for new images…", true);
-        addAutomationLog("Connected to backend automation stream", "ok");
+
+        addAutomationLog(
+            "Connected to backend automation stream",
+            "ok"
+        );
+    });
+
+    es.addEventListener("log", evt => {
+
+        try {
+            const log = JSON.parse(evt.data);
+            // Only add if it's a NEW message (skip ones already in history)
+            if (!window.__seenLogIds) window.__seenLogIds = new Set();
+            const key = (log.at || "") + "|" + (log.message || "");
+            if (window.__seenLogIds.has(key)) return;
+            window.__seenLogIds.add(key);
+            addAutomationLog(log.message, log.level || "info");
+        } catch (e) {}
+    });
+
+    es.addEventListener("client-deleted", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`Client "${d.name}" was deleted`, "warn");
+            loadClients();
+        } catch (_) {}
     });
 
     es.addEventListener("new-post", evt => {
+
         try {
+
             const post = JSON.parse(evt.data);
+
             autoScheduleGeneratedPost(post);
-        } catch (e) { console.log(e); }
+
+        } catch (e) {
+
+            console.log(e);
+        }
     });
 
     es.addEventListener("post-scheduled", evt => {
+
         const { postId } = JSON.parse(evt.data);
-        addAutomationLog(`Server confirmed scheduling for post ${postId}`, "ok");
+
+        addAutomationLog(
+            `Server confirmed scheduling for post ${postId}`,
+            "ok"
+        );
     });
 
     es.addEventListener("pipeline-done", evt => {
@@ -905,14 +1175,17 @@ function connectSSE() {
     });
 
     es.onerror = () => {
+
         setAutoStatus("🔴 Disconnected — retrying…", false);
+
         setTimeout(connectSSE, 3000);
+
         es.close();
     };
 }
 
 /* ============================================================
-   POSTS LIST
+   POSTS LIST (read-only history at bottom of dashboard)
 ============================================================ */
 
 async function loadPosts() {
@@ -940,8 +1213,15 @@ async function loadPosts() {
               <p>${post.hashtags || ""}</p>
               <p class="status-line ${post.status}">${post.status}</p>
               <div class="schedule-box">
-                <input type="datetime-local" id="time-${post.id}" class="schedule-input">
-                <button class="schedule-btn" onclick="schedulePost(${post.id})">
+                <input
+                type="datetime-local"
+                id="time-${post.id}"
+                class="schedule-input"
+                >
+                <button
+                class="schedule-btn"
+                onclick="schedulePost(${post.id})"
+                >
                   Schedule Manually
                 </button>
               </div>
@@ -951,6 +1231,7 @@ async function loadPosts() {
         });
 
     } catch (e) {
+
         console.log(e);
     }
 }
@@ -978,13 +1259,126 @@ async function schedulePost(id) {
     const data = await res.json();
 
     if (data.success) {
+
         alert("Post scheduled ✓");
         loadPosts();
+
     } else {
+
         alert(
             "Failed: " +
-            (typeof data.error === "string" ? data.error : JSON.stringify(data.error))
+            (typeof data.error === "string"
+                ? data.error
+                : JSON.stringify(data.error))
         );
+    }
+}
+
+/* ============================================================
+   INIT
+============================================================ */
+
+/* ============================================================
+   META TOKEN HELPERS
+============================================================ */
+
+async function fetchMetaPages() {
+
+    const input = document.getElementById("metaTokenInput");
+    const status = document.getElementById("metaPagesStatus");
+    const token = (input?.value || "").trim();
+
+    if (!token) {
+        status.innerHTML = '<span style="color:#ff9999;">Please paste a token first.</span>';
+        return;
+    }
+
+    status.innerHTML = '⏳ Fetching pages from Meta…';
+
+    try {
+
+        const r = await fetch("/meta/refresh-pages", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ token })
+        });
+
+        const d = await r.json();
+
+        if (d.success) {
+
+            status.innerHTML =
+                `<span style="color:#7eff7e;">✅ ${d.count} pages linked` +
+                (d.tokenSaved ? " · token saved" : "") +
+                "</span>";
+
+            input.value = "";  // hide token after success
+            addAutomationLog(`✅ Meta: ${d.count} pages fetched and saved`, "ok");
+            loadMetaTargets();
+
+        } else {
+
+            const msg = d.error || "Unknown error";
+            const hint = d.hint ? ` — ${d.hint}` : "";
+            status.innerHTML =
+                `<span style="color:#ff9999;">❌ ${escapeHTML(msg)}${escapeHTML(hint)}</span>`;
+            addAutomationLog(`❌ Meta fetch failed: ${msg}`, "err");
+        }
+
+    } catch (e) {
+
+        status.innerHTML =
+            `<span style="color:#ff9999;">❌ Network error: ${escapeHTML(e.message)}</span>`;
+    }
+}
+
+/* ============================================================
+   LOG PERSISTENCE
+============================================================ */
+
+async function loadPersistedLogs() {
+
+    try {
+
+        const r = await fetch("/logs?limit=300");
+        const logs = await r.json();
+
+        const box = document.getElementById("automationLogs");
+        if (!box) return;
+
+        if (!logs.length) {
+            box.innerHTML = '<div class="empty-state">No logs yet</div>';
+            return;
+        }
+
+        box.innerHTML = "";
+        if (!window.__seenLogIds) window.__seenLogIds = new Set();
+
+        for (const log of logs) {
+            const key = (log.at || "") + "|" + (log.message || "");
+            window.__seenLogIds.add(key);
+            addAutomationLog(log.message, log.level || "info", new Date(log.at));
+        }
+
+    } catch (e) {
+        console.log("loadPersistedLogs error", e);
+    }
+}
+
+async function clearLogs() {
+
+    if (!confirm("Clear all stored logs? This cannot be undone.")) return;
+
+    try {
+
+        await fetch("/logs/clear", { method: "POST" });
+
+        const box = document.getElementById("automationLogs");
+        if (box) box.innerHTML = '<div class="empty-state">Logs cleared</div>';
+        window.__seenLogIds = new Set();
+
+    } catch (e) {
+        console.log("clearLogs error", e);
     }
 }
 
@@ -998,6 +1392,7 @@ async function schedulePost(id) {
 
     await loadClients();
     await loadMetaTargets();
+    await loadPersistedLogs();
 
     autoSelectNowDateTime();
     autoSelectTodayCustomDay();

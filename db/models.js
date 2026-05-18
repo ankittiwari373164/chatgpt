@@ -114,6 +114,16 @@ const RunLogSchema = new Schema({
     detail:  Schema.Types.Mixed
 });
 
+/* ---------- DASHBOARD ACTIVITY LOG ---------- */
+
+const LogSchema = new Schema({
+    at:      { type: Date, default: Date.now, index: true },
+    level:   { type: String, default: "info" }, // "ok" | "info" | "warn" | "err"
+    message: String
+});
+
+LogSchema.index({ at: -1 });
+
 module.exports = {
     Client:    mongoose.model("Client",    ClientSchema),
     Prompt:    mongoose.model("Prompt",    PromptSchema),
@@ -122,5 +132,6 @@ module.exports = {
     Calendar:  mongoose.model("Calendar",  CalendarSchema),
     Session:   mongoose.model("Session",   SessionSchema),
     MetaPage:  mongoose.model("MetaPage",  MetaPageSchema),
-    RunLog:    mongoose.model("RunLog",    RunLogSchema)
+    RunLog:    mongoose.model("RunLog",    RunLogSchema),
+    Log:       mongoose.model("Log",       LogSchema)
 };

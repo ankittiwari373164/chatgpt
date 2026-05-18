@@ -61,6 +61,50 @@ content="width=device-width, initial-scale=1.0"
     </div>
 
     <!-- =========================
+         META TOKEN & PAGES
+    ========================== -->
+
+    <div class="section morning-section" id="metaTokenSection">
+
+        <h2>🔑 Meta Access Token</h2>
+
+        <p class="subtext">
+            Paste your User Access Token from Graph API Explorer.
+            Required permissions: <code>pages_show_list</code>,
+            <code>pages_manage_posts</code>, <code>pages_read_engagement</code>,
+            <code>instagram_basic</code>, <code>instagram_content_publish</code>,
+            <code>business_management</code>.
+        </p>
+
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+
+            <input
+                id="metaTokenInput"
+                type="password"
+                placeholder="EAAB...your access token..."
+                style="flex:1; min-width:280px; padding:10px 12px;
+                       background:#1a1a1a; border:1px solid #333;
+                       border-radius:6px; color:#fff; font-family:monospace;"
+            >
+
+            <button class="main-btn" onclick="fetchMetaPages()">
+                ⚡ Fetch All My Pages
+            </button>
+
+            <a href="https://developers.facebook.com/tools/explorer/"
+               target="_blank" rel="noopener"
+               style="padding:10px 12px; background:#222; border:1px solid #333;
+                      border-radius:6px; color:#9fa9ff; text-decoration:none;">
+                Open Graph API Explorer ↗
+            </a>
+
+        </div>
+
+        <div id="metaPagesStatus" class="subtext" style="margin-top:10px;"></div>
+
+    </div>
+
+    <!-- =========================
          CREATE CLIENT
     ========================== -->
 
@@ -242,10 +286,19 @@ content="width=device-width, initial-scale=1.0"
 
     <div class="section">
 
-        <h2>Live Automation Logs</h2>
+        <h2 style="display:flex; justify-content:space-between; align-items:center;">
+            <span>Live Automation Logs</span>
+            <button
+                onclick="clearLogs()"
+                style="font-size:13px; padding:6px 12px; background:#3a1010;
+                       border:1px solid #5a2020; color:#ffaaaa; border-radius:6px;
+                       cursor:pointer; font-weight:normal;">
+                🗑 Clear
+            </button>
+        </h2>
 
         <div id="automationLogs" class="bot-log">
-            Waiting for automation…
+            Loading…
         </div>
 
     </div>
