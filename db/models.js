@@ -20,6 +20,8 @@ const ClientSchema = new Schema({
     services:   String,
     style:      String,
     cta:        String,
+    logoUrl:    String,   // public URL for client logo (placed in posts)
+    footerUrl:  String,   // public URL for footer/banner image
     createdAt:  { type: Date, default: Date.now }
 }, { timestamps: true });
 

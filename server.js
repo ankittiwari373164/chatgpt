@@ -209,6 +209,87 @@ app.post("/task/:id/fail", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
+   /prompts/queued — list all not-yet-generated prompts
+   /prompts/:id    — DELETE one queued prompt
+============================================================ */
+
+app.get("/prompts/queued", requireMongo, async (req, res) => {
+
+    try {
+
+        const items = await Prompt.find({ generated: false })
+            .sort({ createdAt: 1 })
+            .lean();
+
+        res.json(items.map(p => {
+
+            let cronInfo = null;
+            if (p.error) {
+                try {
+                    const parsed = JSON.parse(p.error);
+                    if (parsed.cronContext) {
+                        cronInfo = {
+                            page:  parsed.cronContext.pageName,
+                            topic: parsed.cronContext.itemTopic,
+                            date:  parsed.cronContext.itemDate
+                        };
+                    }
+                } catch (_) {}
+            }
+
+            return {
+                id:        p._legacyId || p._id,
+                client:    p.client,
+                prompt:    p.prompt,
+                source:    p.source,
+                attempts:  p.attempts || 0,
+                claimedAt: p.claimedAt,
+                createdAt: p.createdAt,
+                cronInfo
+            };
+        }));
+
+    } catch (err) {
+
+        res.json([]);
+    }
+});
+
+app.delete("/prompts/:id", requireMongo, async (req, res) => {
+
+    try {
+
+        const id = req.params.id;
+        const numeric = Number(id);
+
+        const result = await Prompt.deleteOne(
+            Number.isFinite(numeric)
+                ? { _legacyId: numeric }
+                : { _id: id }
+        );
+
+        res.json({ success: true, deleted: result.deletedCount });
+
+    } catch (err) {
+
+        res.json({ success: false, error: err.message });
+    }
+});
+
+app.post("/prompts/clear-all", requireMongo, async (req, res) => {
+
+    try {
+
+        const r = await Prompt.deleteMany({ generated: false });
+        res.json({ success: true, deleted: r.deletedCount });
+
+    } catch (err) {
+
+        res.json({ success: false, error: err.message });
+    }
+});
+
+/* ============================================================
    SAVE PROMPT
 ============================================================ */
 
@@ -313,14 +394,17 @@ async function handleSavePost(req, res) {
         );
 
         const payload = {
-            id:        post._legacyId,
-            client:    post.client,
-            prompt:    post.prompt,
-            image:     post.image,
-            caption:   post.caption,
-            hashtags:  post.hashtags,
-            status:    post.status,
-            createdAt: post.createdAt
+            id:            post._legacyId,
+            client:        post.client,
+            prompt:        post.prompt,
+            image:         post.image,
+            caption:       post.caption,
+            hashtags:      post.hashtags,
+            status:        post.status,
+            createdAt:     post.createdAt,
+            // Tell the dashboard the server already owns the rest of the pipeline.
+            // Dashboard SSE handler must check this and skip auto-scheduling.
+            autoScheduled: !!cronContext
         };
 
         broadcast("new-post", payload);
@@ -372,7 +456,26 @@ async function handleSavePost(req, res) {
    complete the rest of the cron job (caption + Meta scheduling).
 ============================================================ */
 
+/* Module-level dedup: once a post has been auto-scheduled we never do it again */
+const autoScheduledPostIds = new Set();
+
 async function autoCaptionAndSchedule(post, ctx) {
+
+    const postKey = String(post._legacyId || post._id);
+
+    if (autoScheduledPostIds.has(postKey)) {
+        console.log(`⏭ autoCaptionAndSchedule: already done for post ${postKey}`);
+        return;
+    }
+
+    autoScheduledPostIds.add(postKey);
+
+    // Also guard against double-firing across server restarts:
+    // if the Post already has status "scheduled", bail.
+    if (post.scheduled || post.status === "scheduled") {
+        console.log(`⏭ autoCaptionAndSchedule: post ${postKey} already scheduled`);
+        return;
+    }
 
     /* 1. Get the client details */
 
@@ -560,11 +663,102 @@ app.post("/save-client", requireMongo, async (req, res) => {
 
     try {
 
-        await Client.create(req.body);
-        res.json({ success: true });
+        const b = req.body || {};
+        const name = (b.name || "").trim();
+
+        if (!name) {
+            return res.status(400).json({ success: false, error: "name required" });
+        }
+
+        /* ---------- Helper: upload a data URL to Cloudinary ---------- */
+
+        async function uploadDataUrl(dataUrl, label) {
+
+            if (!dataUrl || typeof dataUrl !== "string") return null;
+            if (!dataUrl.startsWith("data:")) return null; // not an upload payload
+
+            if (!process.env.CLOUDINARY_CLOUD_NAME) {
+                throw new Error("Cloudinary is not configured on the server.");
+            }
+
+            const r = await cloudinary.uploader.upload(dataUrl, {
+                folder:    "ai-content/clients/" + name.replace(/[^a-z0-9_-]/gi, "_"),
+                public_id: label + "-" + Date.now(),
+                overwrite: true
+            });
+
+            return r.secure_url;
+        }
+
+        /* ---------- Build the update document ---------- */
+
+        const fields = {
+            name,
+            industry:  b.industry  || "",
+            tone:      b.tone      || "",
+            audience:  b.audience  || "",
+            services:  b.services  || "",
+            style:     b.style     || "",
+            cta:       b.cta       || ""
+        };
+
+        /* Logo */
+
+        if (b.logoDataUrl) {
+
+            try {
+                const url = await uploadDataUrl(b.logoDataUrl, "logo");
+                if (url) fields.logoUrl = url;
+            } catch (e) {
+                return res.status(400).json({
+                    success: false,
+                    error:   "Logo upload failed: " + e.message
+                });
+            }
+
+        } else if (typeof b.logoUrl === "string") {
+
+            // Allow plain URL too (for backward compatibility or if user pastes one)
+            fields.logoUrl = b.logoUrl.trim();
+        }
+
+        /* Footer */
+
+        if (b.footerDataUrl) {
+
+            try {
+                const url = await uploadDataUrl(b.footerDataUrl, "footer");
+                if (url) fields.footerUrl = url;
+            } catch (e) {
+                return res.status(400).json({
+                    success: false,
+                    error:   "Footer upload failed: " + e.message
+                });
+            }
+
+        } else if (typeof b.footerUrl === "string") {
+
+            fields.footerUrl = b.footerUrl.trim();
+        }
+
+        /* ---------- Special clears: "REMOVE" sentinel deletes the field ---------- */
+
+        if (b.logoUrl === "__REMOVE__")   fields.logoUrl   = "";
+        if (b.footerUrl === "__REMOVE__") fields.footerUrl = "";
+
+        /* ---------- Upsert ---------- */
+
+        const doc = await Client.findOneAndUpdate(
+            { name },
+            { $set: fields },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        res.json({ success: true, client: doc });
 
     } catch (err) {
 
+        console.log("/save-client error:", err);
         res.status(500).json({ success: false, error: err.message });
     }
 });

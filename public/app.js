@@ -118,20 +118,37 @@ function renderClientsList(clients) {
     box.innerHTML = clients.map(c => `
         <div style="display:flex; justify-content:space-between; align-items:center;
                     padding:10px 14px; background:#161616; border:1px solid #2a2a2a;
-                    border-radius:8px; margin-bottom:6px;">
-            <div>
+                    border-radius:8px; margin-bottom:6px; gap:10px;">
+            <div style="flex:1; min-width:0;">
                 <div style="font-weight:600;">${escapeHTML(c.name)}</div>
-                <div style="font-size:12px; color:#888;">
-                    ${escapeHTML(c.industry || "")}
-                    ${c.tone ? "· " + escapeHTML(c.tone) : ""}
+                <div style="font-size:12px; color:#888; display:flex; gap:8px; flex-wrap:wrap; margin-top:2px; align-items:center;">
+                    ${c.industry ? `<span>${escapeHTML(c.industry)}</span>` : ''}
+                    ${c.tone ? `<span>· ${escapeHTML(c.tone)}</span>` : ''}
                 </div>
             </div>
-            <button
-                onclick="deleteClient('${encodeURIComponent(c.name).replace(/'/g, "\\'")}')"
-                style="background:#3a1010; border:1px solid #5a2020; color:#ffaaaa;
-                       padding:6px 10px; border-radius:6px; cursor:pointer;">
-                🗑 Delete
-            </button>
+            <div style="display:flex; gap:6px; align-items:center;">
+                ${c.logoUrl
+                    ? `<a href="${escapeHTML(c.logoUrl)}" target="_blank" title="Logo">
+                         <img src="${escapeHTML(c.logoUrl)}" style="width:36px; height:36px; object-fit:cover;
+                              border-radius:6px; border:1px solid #2a2a2a; background:#0a0a0a;">
+                       </a>`
+                    : '<span style="font-size:10px; color:#555; padding:0 4px;">no logo</span>'
+                }
+                ${c.footerUrl
+                    ? `<a href="${escapeHTML(c.footerUrl)}" target="_blank" title="Footer">
+                         <img src="${escapeHTML(c.footerUrl)}" style="width:36px; height:36px; object-fit:cover;
+                              border-radius:6px; border:1px solid #2a2a2a; background:#0a0a0a;">
+                       </a>`
+                    : '<span style="font-size:10px; color:#555; padding:0 4px;">no footer</span>'
+                }
+                <button
+                    onclick="deleteClient('${encodeURIComponent(c.name).replace(/'/g, "\\'")}')"
+                    style="background:#3a1010; border:1px solid #5a2020; color:#ffaaaa;
+                           padding:6px 10px; border-radius:6px; cursor:pointer;
+                           white-space:nowrap;">
+                    🗑 Delete
+                </button>
+            </div>
         </div>
     `).join("");
 }
@@ -166,25 +183,180 @@ async function deleteClient(encodedName) {
     }
 }
 
+/* ============================================================
+   CLIENT LOGO + FOOTER FILE PICKERS
+============================================================ */
+
+// Holds the pending base64 data URL for the next save.
+// null  = no change (keep existing on edit)
+// "__REMOVE__" = user clicked Remove, wipe the field
+// "data:..." = user picked a new file
+window.__pendingLogoData   = null;
+window.__pendingFooterData = null;
+
+function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload  = () => resolve(r.result);
+        r.onerror = () => reject(new Error("File read failed"));
+        r.readAsDataURL(file);
+    });
+}
+
+async function onLogoChosen(input) {
+
+    const f = input.files && input.files[0];
+    if (!f) return;
+
+    if (f.size > 8 * 1024 * 1024) {
+        alert("Logo is too large (max 8 MB). Pick a smaller file.");
+        input.value = "";
+        return;
+    }
+
+    try {
+        const dataUrl = await readFileAsDataUrl(f);
+        window.__pendingLogoData = dataUrl;
+
+        const status  = document.getElementById("logoStatus");
+        const preview = document.getElementById("logoPreview");
+        if (status)  status.textContent  = `✓ ${f.name} (${Math.round(f.size/1024)} KB) — will upload on save`;
+        if (preview) preview.innerHTML = `<img src="${dataUrl}" style="max-height:140px; max-width:100%; object-fit:contain;">`;
+    } catch (e) {
+        alert("Could not read file: " + e.message);
+    }
+}
+
+async function onFooterChosen(input) {
+
+    const f = input.files && input.files[0];
+    if (!f) return;
+
+    if (f.size > 8 * 1024 * 1024) {
+        alert("Footer is too large (max 8 MB). Pick a smaller file.");
+        input.value = "";
+        return;
+    }
+
+    try {
+        const dataUrl = await readFileAsDataUrl(f);
+        window.__pendingFooterData = dataUrl;
+
+        const status  = document.getElementById("footerStatus");
+        const preview = document.getElementById("footerPreview");
+        if (status)  status.textContent  = `✓ ${f.name} (${Math.round(f.size/1024)} KB) — will upload on save`;
+        if (preview) preview.innerHTML = `<img src="${dataUrl}" style="max-height:140px; max-width:100%; object-fit:contain;">`;
+    } catch (e) {
+        alert("Could not read file: " + e.message);
+    }
+}
+
+function clearLogoChoice() {
+    window.__pendingLogoData = "__REMOVE__";
+    const input   = document.getElementById("logoFile");
+    const status  = document.getElementById("logoStatus");
+    const preview = document.getElementById("logoPreview");
+    if (input)   input.value = "";
+    if (status)  status.textContent  = "Will be removed on save";
+    if (preview) preview.innerHTML = '<span style="color:#a44;">— logo will be deleted on save —</span>';
+}
+
+function clearFooterChoice() {
+    window.__pendingFooterData = "__REMOVE__";
+    const input   = document.getElementById("footerFile");
+    const status  = document.getElementById("footerStatus");
+    const preview = document.getElementById("footerPreview");
+    if (input)   input.value = "";
+    if (status)  status.textContent  = "Will be removed on save";
+    if (preview) preview.innerHTML = '<span style="color:#a44;">— footer will be deleted on save —</span>';
+}
+
+function resetLogoFooterUI() {
+    window.__pendingLogoData   = null;
+    window.__pendingFooterData = null;
+
+    const logoInput    = document.getElementById("logoFile");
+    const footerInput  = document.getElementById("footerFile");
+    if (logoInput)   logoInput.value   = "";
+    if (footerInput) footerInput.value = "";
+
+    const ls = document.getElementById("logoStatus");
+    const fs = document.getElementById("footerStatus");
+    if (ls) ls.textContent = "No file chosen";
+    if (fs) fs.textContent = "No file chosen";
+
+    const lp = document.getElementById("logoPreview");
+    const fp = document.getElementById("footerPreview");
+    if (lp) lp.innerHTML = "No logo yet";
+    if (fp) fp.innerHTML = "No footer yet";
+}
+
 async function saveClient() {
 
-    const client = {
-        name:     document.getElementById("name").value,
-        industry: document.getElementById("industry").value,
-        tone:     document.getElementById("tone").value,
-        audience: document.getElementById("audience").value,
-        services: document.getElementById("services").value,
-        style:    document.getElementById("style").value,
-        cta:      document.getElementById("cta").value
+    const $ = id => document.getElementById(id);
+
+    const payload = {
+        name:     $("name").value.trim(),
+        industry: $("industry").value.trim(),
+        tone:     $("tone").value.trim(),
+        audience: $("audience").value.trim(),
+        services: $("services").value.trim(),
+        style:    $("style").value.trim(),
+        cta:      $("cta").value.trim()
     };
 
-    await fetch("/save-client", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(client)
-    });
+    if (!payload.name) {
+        alert("Brand Name is required");
+        return;
+    }
 
-    loadClients();
+    // Logo state
+    if (window.__pendingLogoData === "__REMOVE__") {
+        payload.logoUrl = "__REMOVE__";
+    } else if (window.__pendingLogoData) {
+        payload.logoDataUrl = window.__pendingLogoData;
+    } // else: leave unchanged
+
+    // Footer state
+    if (window.__pendingFooterData === "__REMOVE__") {
+        payload.footerUrl = "__REMOVE__";
+    } else if (window.__pendingFooterData) {
+        payload.footerDataUrl = window.__pendingFooterData;
+    }
+
+    const btn = document.querySelector('[onclick="saveClient()"]');
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Saving + uploading…"; }
+
+    try {
+
+        const r = await fetch("/save-client", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify(payload)
+        });
+
+        const d = await r.json();
+
+        if (d.success) {
+            addAutomationLog(`💾 Saved client "${payload.name}"`, "ok");
+
+            // Clear text fields and file pickers
+            ["name","industry","tone","audience","services","style","cta"]
+                .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+            resetLogoFooterUI();
+
+            loadClients();
+        } else {
+            addAutomationLog(`❌ Save failed: ${d.error || "unknown"}`, "err");
+            alert("Save failed: " + (d.error || "unknown"));
+        }
+
+    } catch (e) {
+        addAutomationLog(`❌ Save failed: ${e.message}`, "err");
+        alert("Save failed: " + e.message);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "Save Client"; }
+    }
 }
 
 /* ============================================================
@@ -1120,6 +1292,28 @@ function connectSSE() {
 
             const post = JSON.parse(evt.data);
 
+            // The corresponding queued prompt was just marked done — refresh list
+            refreshQueuedPrompts();
+
+            // Server-owned pipeline (cron-queued image): skip dashboard auto-schedule
+            if (post.autoScheduled) {
+                addAutomationLog(
+                    `📷 New image: ${post.client} — server is handling caption + scheduling`,
+                    "info"
+                );
+                loadPosts();
+                return;
+            }
+
+            // De-duplicate: dashboard may see the same post twice if SSE
+            // reconnects mid-flow. Track which post IDs we've already pushed.
+            if (!window.__scheduledPostIds) window.__scheduledPostIds = new Set();
+            if (window.__scheduledPostIds.has(post.id)) {
+                console.log("[dashboard] skipping duplicate new-post for id", post.id);
+                return;
+            }
+            window.__scheduledPostIds.add(post.id);
+
             autoScheduleGeneratedPost(post);
 
         } catch (e) {
@@ -1279,6 +1473,123 @@ async function schedulePost(id) {
 ============================================================ */
 
 /* ============================================================
+   QUEUED PROMPTS — what Tampermonkey will pick up next
+============================================================ */
+
+async function refreshQueuedPrompts() {
+
+    const list = document.getElementById("queuedPromptsList");
+    const cnt  = document.getElementById("queuedCount");
+    if (!list) return;
+
+    try {
+
+        const r = await fetch("/prompts/queued");
+        const items = await r.json();
+
+        if (cnt) cnt.textContent = items.length ? `(${items.length})` : "(0)";
+
+        if (!items.length) {
+            list.innerHTML = '<div class="empty-state">No prompts waiting</div>';
+            return;
+        }
+
+        list.innerHTML = items.map(p => {
+
+            const ageS = Math.round((Date.now() - new Date(p.createdAt).getTime()) / 1000);
+            const ageLabel = ageS < 60 ? `${ageS}s` :
+                             ageS < 3600 ? `${Math.round(ageS/60)}m` :
+                             `${Math.round(ageS/3600)}h`;
+
+            const claimed = p.claimedAt
+                ? `<span style="color:#f5b342;">🔒 in progress</span>`
+                : `<span style="color:#888;">waiting</span>`;
+
+            const sourceTag =
+                p.source === "cron"     ? '<span style="color:#7eaaff;">⏰ cron</span>' :
+                p.source === "calendar" ? '<span style="color:#a594ff;">📅 calendar</span>' :
+                                          '<span style="color:#aaa;">📝 manual</span>';
+
+            const cronLine = p.cronInfo
+                ? `<div style="font-size:11px; color:#888; margin-top:4px;">→ ${escapeHTML(p.cronInfo.page || "")} · ${escapeHTML(p.cronInfo.topic || "")}</div>`
+                : "";
+
+            return `
+                <div style="padding:11px 14px; background:#161616; border:1px solid #2a2a2a;
+                            border-radius:8px; margin-bottom:6px;">
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+                        <div style="flex:1; min-width:0;">
+                            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12px; margin-bottom:4px;">
+                                <span style="font-weight:600; color:#fff;">${escapeHTML(p.client)}</span>
+                                ${sourceTag}
+                                ${claimed}
+                                <span style="color:#666;">· ${ageLabel} ago</span>
+                                ${p.attempts ? `<span style="color:#f5b342;">· ${p.attempts} attempts</span>` : ""}
+                            </div>
+                            <div style="font-size:12px; color:#bbb; line-height:1.5;
+                                        max-height:60px; overflow:hidden;
+                                        white-space:pre-wrap; word-break:break-word;">
+                                ${escapeHTML((p.prompt || "").slice(0, 280))}${p.prompt && p.prompt.length > 280 ? "…" : ""}
+                            </div>
+                            ${cronLine}
+                        </div>
+                        <button
+                            onclick="deletePrompt('${encodeURIComponent(String(p.id))}')"
+                            style="background:#3a1010; border:1px solid #5a2020; color:#ffaaaa;
+                                   padding:6px 10px; border-radius:6px; cursor:pointer;
+                                   font-size:12px; white-space:nowrap;">
+                            🗑 Delete
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join("");
+
+    } catch (e) {
+        list.innerHTML = `<div class="empty-state">Failed to load: ${escapeHTML(e.message)}</div>`;
+    }
+}
+
+async function deletePrompt(encodedId) {
+
+    const id = decodeURIComponent(encodedId);
+    if (!confirm("Delete this queued prompt? It will not be sent to ChatGPT.")) return;
+
+    try {
+        const r = await fetch("/prompts/" + encodeURIComponent(id), { method: "DELETE" });
+        const d = await r.json();
+
+        if (d.success) {
+            addAutomationLog(`🗑 Deleted queued prompt ${id}`, "warn");
+            refreshQueuedPrompts();
+        } else {
+            addAutomationLog(`❌ Delete failed: ${d.error || "unknown"}`, "err");
+        }
+    } catch (e) {
+        addAutomationLog(`❌ Delete failed: ${e.message}`, "err");
+    }
+}
+
+async function clearAllPrompts() {
+
+    if (!confirm("Delete ALL queued prompts? This stops every pending automation. This cannot be undone.")) return;
+
+    try {
+        const r = await fetch("/prompts/clear-all", { method: "POST" });
+        const d = await r.json();
+
+        if (d.success) {
+            addAutomationLog(`🗑 Cleared ${d.deleted} queued prompts`, "warn");
+            refreshQueuedPrompts();
+        } else {
+            addAutomationLog(`❌ Clear failed: ${d.error || "unknown"}`, "err");
+        }
+    } catch (e) {
+        addAutomationLog(`❌ Clear failed: ${e.message}`, "err");
+    }
+}
+
+/* ============================================================
    META TOKEN HELPERS
 ============================================================ */
 
@@ -1393,12 +1704,14 @@ async function clearLogs() {
     await loadClients();
     await loadMetaTargets();
     await loadPersistedLogs();
+    await refreshQueuedPrompts();
 
     autoSelectNowDateTime();
     autoSelectTodayCustomDay();
 
     loadPosts();
     setInterval(loadPosts, 8000);
+    setInterval(refreshQueuedPrompts, 10000); // refresh queued list every 10s
 
     connectSSE();
 })();

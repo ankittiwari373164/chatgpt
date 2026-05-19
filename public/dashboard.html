@@ -110,7 +110,7 @@ content="width=device-width, initial-scale=1.0"
 
     <div class="section">
 
-        <h2>Create Client</h2>
+        <h2>Create / Edit Client</h2>
 
         <div class="form-grid">
 
@@ -124,7 +124,72 @@ content="width=device-width, initial-scale=1.0"
 
         </div>
 
-        <button class="main-btn" onclick="saveClient()">
+        <!-- LOGO + FOOTER UPLOADS -->
+        <div style="margin-top:18px; display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+
+            <div style="background:#161616; border:1px solid #2a2a2a; border-radius:8px; padding:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-size:13px; font-weight:600;">🖼 Logo Image</span>
+                    <span id="logoStatus" style="font-size:12px; color:#888;">No file chosen</span>
+                </div>
+                <input
+                    type="file"
+                    id="logoFile"
+                    accept="image/png,image/jpeg,image/jpg,image/webp"
+                    onchange="onLogoChosen(this)"
+                    style="width:100%; font-size:12px; color:#aaa;">
+                <div id="logoPreview"
+                    style="margin-top:10px; min-height:80px; display:flex; align-items:center;
+                           justify-content:center; background:#0e0e0e; border-radius:6px;
+                           color:#444; font-size:11px;">
+                    No logo yet
+                </div>
+                <button
+                    type="button"
+                    onclick="clearLogoChoice()"
+                    style="margin-top:8px; font-size:11px; padding:5px 10px;
+                           background:#2a1010; border:1px solid #4a1f1f;
+                           color:#ffaaaa; border-radius:5px; cursor:pointer;">
+                    Remove logo
+                </button>
+            </div>
+
+            <div style="background:#161616; border:1px solid #2a2a2a; border-radius:8px; padding:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-size:13px; font-weight:600;">🎀 Footer Image</span>
+                    <span id="footerStatus" style="font-size:12px; color:#888;">No file chosen</span>
+                </div>
+                <input
+                    type="file"
+                    id="footerFile"
+                    accept="image/png,image/jpeg,image/jpg,image/webp"
+                    onchange="onFooterChosen(this)"
+                    style="width:100%; font-size:12px; color:#aaa;">
+                <div id="footerPreview"
+                    style="margin-top:10px; min-height:80px; display:flex; align-items:center;
+                           justify-content:center; background:#0e0e0e; border-radius:6px;
+                           color:#444; font-size:11px;">
+                    No footer yet
+                </div>
+                <button
+                    type="button"
+                    onclick="clearFooterChoice()"
+                    style="margin-top:8px; font-size:11px; padding:5px 10px;
+                           background:#2a1010; border:1px solid #4a1f1f;
+                           color:#ffaaaa; border-radius:5px; cursor:pointer;">
+                    Remove footer
+                </button>
+            </div>
+
+        </div>
+
+        <p class="subtext" style="margin-top:10px;">
+            Files upload to Cloudinary when you save. The resulting URLs are sent to
+            ChatGPT with every prompt so the generated image incorporates them.
+            <strong>To edit a saved client</strong>, type the same Brand Name and save — existing logo/footer stays unless you upload a replacement or click Remove.
+        </p>
+
+        <button class="main-btn" onclick="saveClient()" style="margin-top:14px;">
             Save Client
         </button>
 
@@ -277,6 +342,41 @@ content="width=device-width, initial-scale=1.0"
         >
             🚀 Schedule All Posts to Meta
         </button>
+
+    </div>
+
+    <!-- =========================
+         QUEUED PROMPTS
+    ========================== -->
+
+    <div class="section">
+
+        <h2 style="display:flex; justify-content:space-between; align-items:center;">
+            <span>📨 Queued Prompts <span id="queuedCount" style="font-size:13px;color:#888;font-weight:normal;"></span></span>
+            <span>
+                <button onclick="refreshQueuedPrompts()"
+                    style="font-size:13px; padding:6px 12px; background:#1f2a3a;
+                           border:1px solid #2c3a52; color:#aac; border-radius:6px;
+                           cursor:pointer; font-weight:normal; margin-right:6px;">
+                    ↻ Refresh
+                </button>
+                <button onclick="clearAllPrompts()"
+                    style="font-size:13px; padding:6px 12px; background:#3a1010;
+                           border:1px solid #5a2020; color:#ffaaaa; border-radius:6px;
+                           cursor:pointer; font-weight:normal;">
+                    🗑 Clear All
+                </button>
+            </span>
+        </h2>
+
+        <p class="subtext">
+            Prompts waiting for your Chrome (with the Tampermonkey script) to pick up.
+            Open chatgpt.com and the script will start processing them automatically.
+        </p>
+
+        <div id="queuedPromptsList" style="margin-top:10px;">
+            <div class="empty-state">Loading…</div>
+        </div>
 
     </div>
 
