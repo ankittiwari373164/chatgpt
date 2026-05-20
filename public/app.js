@@ -115,7 +115,14 @@ function renderClientsList(clients) {
         return;
     }
 
-    box.innerHTML = clients.map(c => `
+    box.innerHTML = clients.map(c => {
+
+        const pillCount = c.productsCache?.items?.length || 0;
+        const sz = c.postSize || "1:1";
+        const dd = c.postDays || "mwf";
+        const ddLabel = dd === "mwf" ? "MWF" : dd === "mtwtfs" ? "Mon→Sat" : "Daily";
+
+        return `
         <div style="display:flex; justify-content:space-between; align-items:center;
                     padding:10px 14px; background:#161616; border:1px solid #2a2a2a;
                     border-radius:8px; margin-bottom:6px; gap:10px;">
@@ -124,9 +131,13 @@ function renderClientsList(clients) {
                 <div style="font-size:12px; color:#888; display:flex; gap:8px; flex-wrap:wrap; margin-top:2px; align-items:center;">
                     ${c.industry ? `<span>${escapeHTML(c.industry)}</span>` : ''}
                     ${c.tone ? `<span>· ${escapeHTML(c.tone)}</span>` : ''}
+                    <span style="color:#7eaaff;">· ${escapeHTML(sz)}</span>
+                    <span style="color:#7eaaff;">· ${escapeHTML(ddLabel)}</span>
+                    ${pillCount ? `<span style="color:#7eff7e;">· ${pillCount} products</span>` : ''}
+                    ${c.website ? `<span style="color:#666;">· <a href="${escapeHTML(c.website)}" target="_blank" style="color:#7eaaff;">site</a></span>` : ''}
                 </div>
             </div>
-            <div style="display:flex; gap:6px; align-items:center;">
+            <div style="display:flex; gap:6px; align-items:center; flex-wrap:nowrap;">
                 ${c.logoUrl
                     ? `<a href="${escapeHTML(c.logoUrl)}" target="_blank" title="Logo: ${escapeHTML(c.logoUrl)}">
                          <img src="${escapeHTML(c.logoUrl)}"
@@ -146,15 +157,32 @@ function renderClientsList(clients) {
                     : '<span style="font-size:10px; color:#555; padding:0 4px;">no footer</span>'
                 }
                 <button
+                    onclick="editClient('${encodeURIComponent(c.name).replace(/'/g, "\\'")}')"
+                    style="background:#1d2435; border:1px solid #2c3a52; color:#aac;
+                           padding:6px 10px; border-radius:6px; cursor:pointer;
+                           white-space:nowrap; font-size:12px;">
+                    ✏ Edit
+                </button>
+                ${c.website
+                    ? `<button
+                        onclick="refreshProducts('${encodeURIComponent(c.name).replace(/'/g, "\\'")}')"
+                        style="background:#1d3a2a; border:1px solid #2c5a3a; color:#aef;
+                               padding:6px 10px; border-radius:6px; cursor:pointer;
+                               white-space:nowrap; font-size:12px;">
+                        🔍 Scrape
+                    </button>`
+                    : ''
+                }
+                <button
                     onclick="deleteClient('${encodeURIComponent(c.name).replace(/'/g, "\\'")}')"
                     style="background:#3a1010; border:1px solid #5a2020; color:#ffaaaa;
                            padding:6px 10px; border-radius:6px; cursor:pointer;
-                           white-space:nowrap;">
-                    🗑 Delete
+                           white-space:nowrap; font-size:12px;">
+                    🗑
                 </button>
             </div>
-        </div>
-    `).join("");
+        </div>`;
+    }).join("");
 }
 
 function escapeHTML(s) {
@@ -298,15 +326,21 @@ function resetLogoFooterUI() {
 async function saveClient() {
 
     const $ = id => document.getElementById(id);
+    const getRadio = name =>
+        document.querySelector(`input[name="${name}"]:checked`)?.value || "";
 
     const payload = {
-        name:     $("name").value.trim(),
-        industry: $("industry").value.trim(),
-        tone:     $("tone").value.trim(),
-        audience: $("audience").value.trim(),
-        services: $("services").value.trim(),
-        style:    $("style").value.trim(),
-        cta:      $("cta").value.trim()
+        name:        $("name").value.trim(),
+        industry:    $("industry").value.trim(),
+        tone:        $("tone").value.trim(),
+        audience:    $("audience").value.trim(),
+        services:    $("services").value.trim(),
+        style:       $("style").value.trim(),
+        cta:         $("cta").value.trim(),
+        website:     $("website")?.value.trim()     || "",
+        description: $("description")?.value.trim() || "",
+        postSize:    getRadio("postSize") || "1:1",
+        postDays:    getRadio("postDays") || "mwf"
     };
 
     if (!payload.name) {
@@ -314,14 +348,12 @@ async function saveClient() {
         return;
     }
 
-    // Logo state
     if (window.__pendingLogoData === "__REMOVE__") {
         payload.logoUrl = "__REMOVE__";
     } else if (window.__pendingLogoData) {
         payload.logoDataUrl = window.__pendingLogoData;
-    } // else: leave unchanged
+    }
 
-    // Footer state
     if (window.__pendingFooterData === "__REMOVE__") {
         payload.footerUrl = "__REMOVE__";
     } else if (window.__pendingFooterData) {
@@ -343,12 +375,7 @@ async function saveClient() {
 
         if (d.success) {
             addAutomationLog(`💾 Saved client "${payload.name}"`, "ok");
-
-            // Clear text fields and file pickers
-            ["name","industry","tone","audience","services","style","cta"]
-                .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
-            resetLogoFooterUI();
-
+            cancelEdit(); // resets form + previews
             loadClients();
         } else {
             addAutomationLog(`❌ Save failed: ${d.error || "unknown"}`, "err");
@@ -360,6 +387,133 @@ async function saveClient() {
         alert("Save failed: " + e.message);
     } finally {
         if (btn) { btn.disabled = false; btn.textContent = "Save Client"; }
+    }
+}
+
+/* ============================================================
+   EDIT EXISTING CLIENT — pre-fills the form
+============================================================ */
+
+async function editClient(encodedName) {
+
+    const name = decodeURIComponent(encodedName);
+
+    try {
+
+        const r = await fetch("/clients/" + encodeURIComponent(name));
+        if (!r.ok) throw new Error("Client not found");
+        const c = await r.json();
+
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ""; };
+
+        set("name",        c.name);
+        set("industry",    c.industry);
+        set("tone",        c.tone);
+        set("audience",    c.audience);
+        set("services",    c.services);
+        set("style",       c.style);
+        set("cta",         c.cta);
+        set("website",     c.website);
+        set("description", c.description);
+
+        const nameEl = document.getElementById("name");
+        if (nameEl) nameEl.disabled = true;
+
+        const sz = c.postSize || "1:1";
+        const dd = c.postDays || "mwf";
+        const szR = document.querySelector(`input[name="postSize"][value="${sz}"]`);
+        const ddR = document.querySelector(`input[name="postDays"][value="${dd}"]`);
+        if (szR) szR.checked = true;
+        if (ddR) ddR.checked = true;
+
+        window.__pendingLogoData = null;
+        window.__pendingFooterData = null;
+        const lp = document.getElementById("logoPreview");
+        const fp = document.getElementById("footerPreview");
+        const ls = document.getElementById("logoStatus");
+        const fs = document.getElementById("footerStatus");
+        if (c.logoUrl) {
+            if (lp) lp.innerHTML = `<img src="${escapeHTML(c.logoUrl)}" style="max-height:140px; max-width:100%; object-fit:contain;">`;
+            if (ls) ls.textContent = "Existing logo (upload new to replace)";
+        } else {
+            if (lp) lp.innerHTML = "No logo yet";
+            if (ls) ls.textContent = "No file chosen";
+        }
+        if (c.footerUrl) {
+            if (fp) fp.innerHTML = `<img src="${escapeHTML(c.footerUrl)}" style="max-height:140px; max-width:100%; object-fit:contain;">`;
+            if (fs) fs.textContent = "Existing footer (upload new to replace)";
+        } else {
+            if (fp) fp.innerHTML = "No footer yet";
+            if (fs) fs.textContent = "No file chosen";
+        }
+
+        const eb = document.getElementById("editingBadge");
+        const cb = document.getElementById("cancelEditBtn");
+        if (eb) eb.style.display = "inline";
+        if (cb) cb.style.display = "inline-block";
+
+        addAutomationLog(`✏ Editing "${name}" — scroll up to the form`, "info");
+        window.scrollTo({ top: 0, behavior: "smooth" });
+
+    } catch (e) {
+        addAutomationLog(`❌ Could not load client: ${e.message}`, "err");
+        alert("Failed to load client: " + e.message);
+    }
+}
+
+function cancelEdit() {
+
+    ["name","industry","tone","audience","services","style","cta","website","description"]
+        .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+
+    const nameEl = document.getElementById("name");
+    if (nameEl) nameEl.disabled = false;
+
+    const szR = document.querySelector('input[name="postSize"][value="1:1"]');
+    const ddR = document.querySelector('input[name="postDays"][value="mwf"]');
+    if (szR) szR.checked = true;
+    if (ddR) ddR.checked = true;
+
+    resetLogoFooterUI();
+
+    const eb = document.getElementById("editingBadge");
+    const cb = document.getElementById("cancelEditBtn");
+    if (eb) eb.style.display = "none";
+    if (cb) cb.style.display = "none";
+}
+
+/* ============================================================
+   REFRESH PRODUCTS — scrape website on demand
+============================================================ */
+
+async function refreshProducts(encodedName) {
+
+    const name = decodeURIComponent(encodedName);
+
+    if (!confirm(`Scrape "${name}" website now? This will read products from their site and may take 10-20 seconds.`)) return;
+
+    addAutomationLog(`🔍 Scraping products for "${name}"…`, "info");
+
+    try {
+
+        const r = await fetch("/clients/" + encodeURIComponent(name) + "/scrape-products", {
+            method: "POST"
+        });
+
+        const d = await r.json();
+
+        if (d.success) {
+            addAutomationLog(`✓ Found ${d.count} product(s) for "${name}" (source: ${d.source})`, "ok");
+            if (d.count === 0) {
+                addAutomationLog(`⚠ The site may use JavaScript rendering or block scraping. Add details in the Description field instead.`, "warn");
+            }
+            loadClients();
+        } else {
+            addAutomationLog(`❌ Scrape failed: ${d.error || "unknown"}`, "err");
+        }
+
+    } catch (e) {
+        addAutomationLog(`❌ Scrape failed: ${e.message}`, "err");
     }
 }
 

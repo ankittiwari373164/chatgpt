@@ -790,12 +790,16 @@ app.post("/save-client", requireMongo, async (req, res) => {
 
         const fields = {
             name,
-            industry:  b.industry  || "",
-            tone:      b.tone      || "",
-            audience:  b.audience  || "",
-            services:  b.services  || "",
-            style:     b.style     || "",
-            cta:       b.cta       || ""
+            industry:    b.industry    || "",
+            tone:        b.tone        || "",
+            audience:    b.audience    || "",
+            services:    b.services    || "",
+            style:       b.style       || "",
+            cta:         b.cta         || "",
+            description: b.description || "",
+            website:     (b.website     || "").trim(),
+            postSize:    b.postSize    || "1:1",
+            postDays:    b.postDays    || "mwf"
         };
 
         /* Logo */
@@ -862,6 +866,61 @@ app.post("/save-client", requireMongo, async (req, res) => {
 app.get("/clients", requireMongo, async (req, res) => {
 
     res.json(await Client.find().lean());
+});
+
+/* ============================================================
+   GET a single client by name (used by dashboard Edit button)
+============================================================ */
+
+app.get("/clients/:name", requireMongo, async (req, res) => {
+
+    try {
+        const c = await Client.findOne({ name: req.params.name }).lean();
+        if (!c) return res.status(404).json({ error: "Client not found" });
+        res.json(c);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   POST /clients/:name/scrape-products  — manually refresh
+   the website product cache. Returns the scraped items.
+============================================================ */
+
+app.post("/clients/:name/scrape-products", requireMongo, async (req, res) => {
+
+    try {
+
+        const { getProductsForClient } = require("./lib/scraper");
+
+        const client = await Client.findOne({ name: req.params.name });
+        if (!client) return res.status(404).json({ error: "Client not found" });
+        if (!client.website) {
+            return res.status(400).json({ error: "Client has no website URL set" });
+        }
+
+        const result = await getProductsForClient(client, { force: true });
+
+        client.productsCache = {
+            items:     result.items,
+            scrapedAt: new Date(),
+            source:    result.source
+        };
+        await client.save();
+
+        res.json({
+            success: true,
+            count:   result.items.length,
+            source:  result.source,
+            items:   result.items
+        });
+
+    } catch (err) {
+
+        console.log("/clients/:name/scrape-products error:", err.message);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 /* ============================================================
@@ -989,21 +1048,48 @@ app.post("/generate-calendar", requireMongo, async (req, res) => {
         const client = req.body;
         const today  = new Date().toISOString().split("T")[0];
 
+        /* ----- Resolve postDays into a description Groq understands ----- */
+
+        const postDays = client.postDays || "mwf";
+
+        const DAY_LABELS = {
+            "mwf":    { count: 12, label: "every Monday, Wednesday, and Friday (3 posts per week)" },
+            "mtwtfs": { count: 24, label: "Monday through Saturday (6 posts per week, skip Sunday)" },
+            "daily":  { count: 30, label: "every day of the week (7 posts per week)" }
+        };
+
+        const cfg = DAY_LABELS[postDays] || DAY_LABELS.mwf;
+
+        /* ----- If client has products cached, feed top items to Groq ---- */
+
+        const productList = client.productsCache?.items?.length
+            ? "\n\nFeatured products (use one per ~3-4 posts):\n" +
+              client.productsCache.items.slice(0, 10).map((p, i) =>
+                  `${i+1}. ${p.title}${p.price ? " — " + p.price : ""}`
+              ).join("\n")
+            : "";
+
         const prompt = `
-Generate 30 day content calendar.
+Generate a one-month content calendar for a social media brand.
 
-Brand:    ${client.name}
-Industry: ${client.industry}
-Tone:     ${client.tone}
-Audience: ${client.audience}
-Services: ${client.services}
-Style:    ${client.style}
-CTA:      ${client.cta}
+Brand:        ${client.name}
+Industry:     ${client.industry || ""}
+Tone:         ${client.tone || ""}
+Audience:     ${client.audience || ""}
+Services:     ${client.services || ""}
+Style:        ${client.style || ""}
+CTA:          ${client.cta || ""}
+Website:      ${client.website || ""}
+Description:  ${client.description || ""}
+${productList}
 
-Start from ${today}.
+POSTING SCHEDULE: Post on ${cfg.label}.
+Generate EXACTLY ${cfg.count} entries — one for each posting day in the next ~30 days, starting from ${today}.
+Do NOT include dates that fall outside the posting schedule.
 
-Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
-30 entries:
+Each topic should be conceptual, bold, and specific — not generic stock-photo ideas.
+
+Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
 
 [ { "date":"YYYY-MM-DD", "event":"", "topic":"", "goal":"" } ]
 `;
@@ -1092,12 +1178,36 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
             });
         }
 
-        const calendar = parseCalendarArray(raw);
+        const calendarRaw = parseCalendarArray(raw);
 
-        if (!calendar.length) {
+        if (!calendarRaw.length) {
 
             return res.status(502).json({
                 error: "Groq returned an unparseable calendar. Click again to retry."
+            });
+        }
+
+        /* Filter to dates that match the postDays pattern.
+           Defense in depth: Groq sometimes ignores the constraint. */
+
+        const allowedDayIdx = {
+            "mwf":    new Set([1, 3, 5]),       // Mon, Wed, Fri
+            "mtwtfs": new Set([1, 2, 3, 4, 5, 6]),
+            "daily":  new Set([0, 1, 2, 3, 4, 5, 6])
+        };
+
+        const allowed = allowedDayIdx[postDays] || allowedDayIdx.mwf;
+
+        const calendar = calendarRaw.filter(item => {
+            if (!item.date) return false;
+            const d = new Date(item.date + "T00:00:00");
+            if (isNaN(d)) return false;
+            return allowed.has(d.getDay());
+        });
+
+        if (!calendar.length) {
+            return res.status(502).json({
+                error: "Groq returned entries but none matched your posting schedule. Click again to retry."
             });
         }
 
@@ -1108,7 +1218,8 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
         );
 
         console.log(
-            `📅 Saved calendar for "${client.name}" — ${calendar.length} items`
+            `📅 Saved calendar for "${client.name}" — ${calendar.length} items ` +
+            `(filtered ${calendarRaw.length - calendar.length} off-schedule)`
         );
 
         res.json(calendar);

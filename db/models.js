@@ -13,16 +13,25 @@ const { Schema }   = mongoose;
 /* ---------- CLIENT ---------- */
 
 const ClientSchema = new Schema({
-    name:       { type: String, required: true, index: true },
-    industry:   String,
-    tone:       String,
-    audience:   String,
-    services:   String,
-    style:      String,
-    cta:        String,
-    logoUrl:    String,   // public URL for client logo (placed in posts)
-    footerUrl:  String,   // public URL for footer/banner image
-    createdAt:  { type: Date, default: Date.now }
+    name:        { type: String, required: true, index: true },
+    industry:    String,
+    tone:        String,
+    audience:    String,
+    services:    String,
+    style:       String,
+    cta:         String,
+    description: String,             // long-form business description
+    website:     String,             // public website URL
+    postSize:    { type: String, default: "1:1" },  // "1:1" | "4:5" | "9:16"
+    postDays:    { type: String, default: "mwf" },  // "mwf" | "mtwtfs" | "daily"
+    logoUrl:     String,
+    footerUrl:   String,
+    productsCache: {                 // populated by scraper.js
+        items:     [Schema.Types.Mixed],
+        scrapedAt: Date,
+        source:    String
+    },
+    createdAt:   { type: Date, default: Date.now }
 }, { timestamps: true });
 
 /* ---------- PROMPT (queue) ---------- */
