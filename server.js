@@ -204,10 +204,21 @@ app.get("/current-task", requireMongo, async (req, res) => {
 
         if (!claimed) return res.json(null);
 
+        // Look up the client to enrich the task with brand assets
+        let logoUrl = "", footerUrl = "";
+
+        try {
+            const c = await Client.findOne({ name: claimed.client }).lean();
+            logoUrl   = c?.logoUrl   || "";
+            footerUrl = c?.footerUrl || "";
+        } catch (_) {}
+
         res.json({
-            id:     claimed._legacyId || claimed._id,
-            client: claimed.client,
-            prompt: claimed.prompt
+            id:        claimed._legacyId || claimed._id,
+            client:    claimed.client,
+            prompt:    claimed.prompt,
+            logoUrl,
+            footerUrl
         });
 
     } catch (err) {
@@ -379,17 +390,23 @@ async function handleSavePost(req, res) {
             } catch (_) {}
         }
 
-        /* ---------- Composite logo + footer onto the image ---------- */
+        /* ---------- Composite logo + footer onto the image ----------
+           Only fires if OVERLAY_BRAND_ASSETS=true. Default OFF because
+           Tampermonkey v16+ attaches the actual files into ChatGPT,
+           so the model produces a branded image directly. Set this to
+           "true" if you want belt-and-braces stamping on top. */
 
         let imageToUpload = image;
 
-        if (logoUrl || footerUrl) {
+        const wantOverlay =
+            String(process.env.OVERLAY_BRAND_ASSETS || "false").toLowerCase() === "true";
+
+        if (wantOverlay && (logoUrl || footerUrl)) {
 
             try {
 
                 console.log(
-                    `🎨 Compositing brand assets onto image for "${client}" ` +
-                    `(logo=${!!logoUrl}, footer=${!!footerUrl})`
+                    `🎨 Server-side overlay for "${client}" (OVERLAY_BRAND_ASSETS=true)`
                 );
 
                 imageToUpload = await composeBrandedImage({
