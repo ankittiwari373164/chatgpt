@@ -25,6 +25,8 @@ const dailyCron      = require("./lib/dailyCron");
 const puppeteerCG    = require("./lib/puppeteerChatGPT");
 const { generateImage } = require("./lib/imageGen");
 
+const { composeBrandedImage } = require("./lib/composer");
+
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key:    process.env.CLOUDINARY_API_KEY,
@@ -364,13 +366,52 @@ async function handleSavePost(req, res) {
             });
         }
 
+        /* ---------- Look up the client's brand assets ---------- */
+
+        let logoUrl   = "";
+        let footerUrl = "";
+
+        if (client) {
+            try {
+                const c = await Client.findOne({ name: client }).lean();
+                logoUrl   = c?.logoUrl   || "";
+                footerUrl = c?.footerUrl || "";
+            } catch (_) {}
+        }
+
+        /* ---------- Composite logo + footer onto the image ---------- */
+
+        let imageToUpload = image;
+
+        if (logoUrl || footerUrl) {
+
+            try {
+
+                console.log(
+                    `🎨 Compositing brand assets onto image for "${client}" ` +
+                    `(logo=${!!logoUrl}, footer=${!!footerUrl})`
+                );
+
+                imageToUpload = await composeBrandedImage({
+                    baseImage: image,
+                    logoUrl,
+                    footerUrl
+                });
+
+            } catch (e) {
+
+                console.log("Composite failed, using original image:", e.message);
+                imageToUpload = image;
+            }
+        }
+
         /* ---------- Upload to Cloudinary ---------- */
 
-        let secureUrl = image;
+        let secureUrl = imageToUpload;
 
         try {
 
-            const upload = await cloudinary.uploader.upload(image, {
+            const upload = await cloudinary.uploader.upload(imageToUpload, {
                 folder: "ai-content"
             });
             secureUrl = upload.secure_url;
