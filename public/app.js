@@ -655,6 +655,94 @@ function renderCalendar(client, calendar) {
    Load a previously saved calendar from the server
 ============================================================ */
 
+/* ============================================================
+   EXPORT calendar as .xlsx
+============================================================ */
+
+function exportCalendarXlsx() {
+
+    const name = document.getElementById("clients")?.value?.trim();
+    if (!name) {
+        alert("Pick a client first");
+        return;
+    }
+
+    addAutomationLog(`📤 Exporting calendar for "${name}" to Excel…`, "info");
+
+    // Simple navigation triggers the file download with the right headers
+    const url = "/calendar/" + encodeURIComponent(name) + "/export.xlsx";
+    window.location.href = url;
+}
+
+/* ============================================================
+   IMPORT calendar from .xlsx — file picker triggers this
+============================================================ */
+
+async function importCalendarXlsx(input) {
+
+    const file = input.files && input.files[0];
+    input.value = ""; // reset picker so the same file can be re-imported
+
+    if (!file) return;
+
+    const name = document.getElementById("clients")?.value?.trim();
+    if (!name) {
+        alert("Pick a client first, then import their calendar.");
+        return;
+    }
+
+    if (!confirm(
+        `Replace the saved calendar for "${name}" with the contents of "${file.name}"?\n\n` +
+        `This will overwrite the existing calendar. The current "done" markers will be lost ` +
+        `unless they're in the Excel "Done" column.`
+    )) return;
+
+    addAutomationLog(`📥 Importing "${file.name}" into "${name}"…`, "info");
+
+    try {
+
+        const fd = new FormData();
+        fd.append("file", file);
+
+        const r = await fetch(
+            "/calendar/" + encodeURIComponent(name) + "/import",
+            { method: "POST", body: fd }
+        );
+
+        const d = await r.json();
+
+        if (r.ok && d.success) {
+
+            addAutomationLog(
+                `✓ Imported ${d.imported} row(s) into "${name}"` +
+                (d.skipped ? ` (${d.skipped} skipped)` : ""),
+                "ok"
+            );
+
+            if (d.issues?.length) {
+                d.issues.forEach(i => addAutomationLog(`   ${i}`, "warn"));
+            }
+
+            // Refresh the calendar view
+            await loadSavedCalendar();
+
+        } else {
+
+            const msg = d.error || "Import failed";
+            addAutomationLog(`❌ Import failed: ${msg}`, "err");
+            if (d.issues?.length) {
+                d.issues.forEach(i => addAutomationLog(`   ${i}`, "warn"));
+            }
+            alert("Import failed: " + msg);
+        }
+
+    } catch (e) {
+
+        addAutomationLog(`❌ Import failed: ${e.message}`, "err");
+        alert("Import failed: " + e.message);
+    }
+}
+
 async function loadSavedCalendar() {
 
     const name = document.getElementById("clients")?.value;

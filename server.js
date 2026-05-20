@@ -1853,6 +1853,242 @@ app.get("/calendar/:client", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
+   GET /calendar/:client/export.xlsx
+   Stream an .xlsx file with the calendar so the user can edit
+   it in Excel. Columns: Date · Day · Event · Topic · Goal · Done.
+============================================================ */
+
+app.get("/calendar/:client/export.xlsx", requireMongo, async (req, res) => {
+
+    try {
+
+        const ExcelJS = require("exceljs");
+
+        const client = req.params.client;
+
+        const cal = await Calendar.findOne({ client }).lean();
+
+        const rows = cal?.calendar || [];
+
+        const wb = new ExcelJS.Workbook();
+        wb.creator = "AI Content Automation";
+        wb.created = new Date();
+
+        const ws = wb.addWorksheet(client.slice(0, 30) || "Calendar");
+
+        ws.columns = [
+            { header: "Date",  key: "date",  width: 14 },
+            { header: "Day",   key: "day",   width: 12 },
+            { header: "Event", key: "event", width: 24 },
+            { header: "Topic", key: "topic", width: 48 },
+            { header: "Goal",  key: "goal",  width: 36 },
+            { header: "Done",  key: "done",  width: 8 }
+        ];
+
+        // Style the header row
+        ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+        ws.getRow(1).fill = {
+            type:    "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FF1f2937" }
+        };
+        ws.getRow(1).alignment = { vertical: "middle" };
+        ws.views = [{ state: "frozen", ySplit: 1 }];
+
+        const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+        rows.forEach(item => {
+
+            let dayName = "";
+            if (item.date) {
+                const d = new Date(item.date + "T00:00:00");
+                if (!isNaN(d)) dayName = days[d.getDay()];
+            }
+
+            ws.addRow({
+                date:  item.date  || "",
+                day:   dayName,
+                event: item.event || "",
+                topic: item.topic || "",
+                goal:  item.goal  || "",
+                done:  item.done  ? "yes" : ""
+            });
+        });
+
+        // Set content disposition headers
+        const safeName = client.replace(/[^a-z0-9_-]/gi, "_");
+        const filename = `calendar-${safeName}-${new Date().toISOString().slice(0,10)}.xlsx`;
+
+        res.setHeader(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${filename}"`
+        );
+
+        await wb.xlsx.write(res);
+        res.end();
+
+    } catch (err) {
+
+        console.log("/calendar export error:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   POST /calendar/:client/import
+   Body: multipart form-data with field "file" = .xlsx
+   Parses the workbook (first sheet), validates rows, replaces
+   the saved calendar for that client.
+============================================================ */
+
+const multer = require("multer");
+const xlsxUpload = multer({
+    storage: multer.memoryStorage(),
+    limits:  { fileSize: 10 * 1024 * 1024 }   // 10 MB
+});
+
+app.post("/calendar/:client/import",
+    requireMongo,
+    xlsxUpload.single("file"),
+    async (req, res) => {
+
+        try {
+
+            const ExcelJS = require("exceljs");
+
+            const client = req.params.client;
+
+            if (!req.file?.buffer) {
+                return res.status(400).json({ error: "No file uploaded" });
+            }
+
+            const wb = new ExcelJS.Workbook();
+            await wb.xlsx.load(req.file.buffer);
+
+            const ws = wb.worksheets[0];
+            if (!ws) return res.status(400).json({ error: "Workbook has no sheets" });
+
+            /* Find the header row + column indices so users can
+               reorder columns or rename them slightly. We accept
+               case-insensitive matches. */
+
+            const headerRow = ws.getRow(1);
+            const colByName = {};
+
+            headerRow.eachCell((cell, colNumber) => {
+                const v = String(cell.value || "").trim().toLowerCase();
+                if (v) colByName[v] = colNumber;
+            });
+
+            const colDate  = colByName["date"];
+            const colEvent = colByName["event"];
+            const colTopic = colByName["topic"];
+            const colGoal  = colByName["goal"];
+            const colDone  = colByName["done"];
+
+            if (!colDate || !colTopic) {
+                return res.status(400).json({
+                    error: "Sheet must have at least 'Date' and 'Topic' columns " +
+                           "(case-insensitive header row 1)."
+                });
+            }
+
+            const calendar = [];
+            const issues   = [];
+
+            ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+
+                if (rowNumber === 1) return; // skip header
+
+                /* Extract date — Excel may give us a Date object or
+                   a string. Normalize to YYYY-MM-DD. */
+
+                let rawDate = row.getCell(colDate).value;
+                let dateStr = "";
+
+                if (rawDate instanceof Date) {
+                    // Use local components to avoid TZ shift surprises
+                    const y  = rawDate.getFullYear();
+                    const m  = String(rawDate.getMonth() + 1).padStart(2, "0");
+                    const dd = String(rawDate.getDate()).padStart(2, "0");
+                    dateStr = `${y}-${m}-${dd}`;
+                } else if (typeof rawDate === "string") {
+                    const trimmed = rawDate.trim();
+                    // Accept YYYY-MM-DD or D/M/YYYY or M/D/YYYY
+                    const iso = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+                    if (iso) {
+                        dateStr = `${iso[1]}-${iso[2].padStart(2,"0")}-${iso[3].padStart(2,"0")}`;
+                    } else {
+                        const parsed = new Date(trimmed);
+                        if (!isNaN(parsed)) {
+                            const y  = parsed.getFullYear();
+                            const m  = String(parsed.getMonth() + 1).padStart(2, "0");
+                            const dd = String(parsed.getDate()).padStart(2, "0");
+                            dateStr = `${y}-${m}-${dd}`;
+                        }
+                    }
+                } else if (rawDate && typeof rawDate === "object" && rawDate.text) {
+                    // Hyperlink/formula cell
+                    dateStr = String(rawDate.text).trim();
+                }
+
+                const topic = String(row.getCell(colTopic).value || "").trim();
+
+                if (!dateStr || !topic) {
+                    issues.push(`Row ${rowNumber}: skipped (missing date or topic)`);
+                    return;
+                }
+
+                const event = colEvent ? String(row.getCell(colEvent).value || "").trim() : "";
+                const goal  = colGoal  ? String(row.getCell(colGoal ).value || "").trim() : "";
+
+                let done = false;
+                if (colDone) {
+                    const d = String(row.getCell(colDone).value || "").trim().toLowerCase();
+                    done = ["yes","y","true","1","done","✓"].includes(d);
+                }
+
+                calendar.push({ date: dateStr, event, topic, goal, done });
+            });
+
+            if (!calendar.length) {
+                return res.status(400).json({
+                    error: "No valid rows found. Make sure rows have a Date and a Topic.",
+                    issues
+                });
+            }
+
+            await Calendar.findOneAndUpdate(
+                { client },
+                { client, calendar },
+                { upsert: true, new: true }
+            );
+
+            console.log(
+                `📥 Imported calendar for "${client}" — ${calendar.length} rows ` +
+                `(${issues.length} skipped)`
+            );
+
+            res.json({
+                success: true,
+                imported: calendar.length,
+                skipped:  issues.length,
+                issues:   issues.slice(0, 20)
+            });
+
+        } catch (err) {
+
+            console.log("/calendar import error:", err.message);
+            res.status(500).json({ error: err.message });
+        }
+    }
+);
+
+/* ============================================================
    /save  — backward compatibility (Tampermonkey old version)
 ============================================================ */
 

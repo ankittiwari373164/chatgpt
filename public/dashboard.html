@@ -262,14 +262,40 @@ content="width=device-width, initial-scale=1.0"
 
     <div class="section">
 
-        <h2>Generate Calendar</h2>
+        <h2>Content Calendar</h2>
 
-        <div class="calendar-top">
-            <select id="clients"></select>
+        <div class="calendar-top" style="flex-wrap:wrap; gap:8px;">
+            <select id="clients" style="flex:1; min-width:180px;"></select>
             <button class="main-btn" id="generateCalendarBtn" onclick="generateCalendar()">
-                Generate Calendar
+                🤖 Generate
             </button>
+            <button
+                onclick="exportCalendarXlsx()"
+                style="padding:9px 16px; background:#0e3a1f; border:1px solid #1a6437;
+                       color:#a4f0bd; border-radius:6px; cursor:pointer;
+                       font-weight:600; font-size:14px;">
+                📤 Export Excel
+            </button>
+            <button
+                onclick="document.getElementById('calImportFile').click()"
+                style="padding:9px 16px; background:#1d2435; border:1px solid #2c3a52;
+                       color:#aac; border-radius:6px; cursor:pointer;
+                       font-weight:600; font-size:14px;">
+                📥 Import Excel
+            </button>
+            <input
+                type="file"
+                id="calImportFile"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onchange="importCalendarXlsx(this)"
+                style="display:none;">
         </div>
+
+        <p class="subtext" style="margin-top:6px;">
+            Export to Excel → edit the rows in Excel → import back. You can change
+            topics, goals, even add or remove rows. The first row must keep its
+            headers (Date, Event, Topic, Goal, Done).
+        </p>
 
         <div id="calendar"></div>
 
