@@ -128,16 +128,20 @@ function renderClientsList(clients) {
             </div>
             <div style="display:flex; gap:6px; align-items:center;">
                 ${c.logoUrl
-                    ? `<a href="${escapeHTML(c.logoUrl)}" target="_blank" title="Logo">
-                         <img src="${escapeHTML(c.logoUrl)}" style="width:36px; height:36px; object-fit:cover;
-                              border-radius:6px; border:1px solid #2a2a2a; background:#0a0a0a;">
+                    ? `<a href="${escapeHTML(c.logoUrl)}" target="_blank" title="Logo: ${escapeHTML(c.logoUrl)}">
+                         <img src="${escapeHTML(c.logoUrl)}"
+                              onerror="this.outerHTML='<span style=&quot;font-size:10px;color:#f88;padding:0 4px;&quot;>logo broken</span>';"
+                              style="width:36px; height:36px; object-fit:cover;
+                                     border-radius:6px; border:1px solid #2a2a2a; background:#0a0a0a;">
                        </a>`
                     : '<span style="font-size:10px; color:#555; padding:0 4px;">no logo</span>'
                 }
                 ${c.footerUrl
-                    ? `<a href="${escapeHTML(c.footerUrl)}" target="_blank" title="Footer">
-                         <img src="${escapeHTML(c.footerUrl)}" style="width:36px; height:36px; object-fit:cover;
-                              border-radius:6px; border:1px solid #2a2a2a; background:#0a0a0a;">
+                    ? `<a href="${escapeHTML(c.footerUrl)}" target="_blank" title="Footer: ${escapeHTML(c.footerUrl)}">
+                         <img src="${escapeHTML(c.footerUrl)}"
+                              onerror="this.outerHTML='<span style=&quot;font-size:10px;color:#f88;padding:0 4px;&quot;>footer broken</span>';"
+                              style="width:36px; height:36px; object-fit:cover;
+                                     border-radius:6px; border:1px solid #2a2a2a; background:#0a0a0a;">
                        </a>`
                     : '<span style="font-size:10px; color:#555; padding:0 4px;">no footer</span>'
                 }

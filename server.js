@@ -45,12 +45,26 @@ app.use(express.static("public"));
 
 const { mongoose } = require("./db/connect");
 
-function requireMongo(req, res, next) {
+async function requireMongo(req, res, next) {
 
     if (mongoose.connection.readyState === 1) return next();
 
+    /* If Atlas dropped the connection while the server was idle,
+       Mongoose's autoReconnect will bring it back within a few
+       seconds. Wait for that instead of erroring out instantly. */
+
+    const start = Date.now();
+    const WAIT_MS = 8000;
+
+    while (Date.now() - start < WAIT_MS) {
+
+        await new Promise(r => setTimeout(r, 250));
+        if (mongoose.connection.readyState === 1) return next();
+    }
+
     res.status(503).json({
-        error: "Database not connected. Check MONGODB_URI."
+        error:      "Database not connected. Check MONGODB_URI.",
+        readyState: mongoose.connection.readyState
     });
 }
 
@@ -126,12 +140,30 @@ function broadcast(eventName, payload) {
 
 app.get("/health", (req, res) => {
 
-    const { mongoose } = require("./db/connect");
+    const { mongoose, connect: dbConnect } = require("./db/connect");
+
+    const states = {
+        0: "disconnected",
+        1: "connected",
+        2: "connecting",
+        3: "disconnecting",
+        99: "uninitialized"
+    };
+
+    const state = mongoose.connection.readyState;
+    const stateName = states[state] || "unknown";
+
+    // If we're not connected, kick off a reconnect attempt
+    if (state !== 1 && state !== 2) {
+
+        dbConnect().catch(() => {});
+    }
 
     res.json({
         ok:        true,
         uptime:    process.uptime(),
-        mongo:     mongoose.connection.readyState === 1 ? "up" : "down",
+        mongo:     stateName,
+        mongoCode: state,
         time:      new Date().toISOString()
     });
 });
@@ -687,6 +719,12 @@ app.post("/save-client", requireMongo, async (req, res) => {
                 overwrite: true
             });
 
+            if (!r || !r.secure_url) {
+                console.log(`Cloudinary returned no secure_url for ${label}:`, r);
+                throw new Error("Cloudinary upload returned no URL");
+            }
+
+            console.log(`☁ ${label} uploaded → ${r.secure_url} (${r.width}x${r.height}, ${r.bytes} bytes)`);
             return r.secure_url;
         }
 
