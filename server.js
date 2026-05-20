@@ -950,11 +950,11 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
 [ { "date":"YYYY-MM-DD", "event":"", "topic":"", "goal":"" } ]
 `;
 
-        // Retry on 429s with exponential backoff
         let raw = null;
         let lastErr;
+        let lastStatus;
 
-        for (let attempt = 1; attempt <= 4; attempt++) {
+        for (let attempt = 1; attempt <= 6; attempt++) {
 
             try {
 
@@ -977,14 +977,22 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
 
             } catch (err) {
 
-                lastErr = err;
-                const status = err.response?.status;
+                lastErr    = err;
+                lastStatus = err.response?.status;
 
-                if (status === 429 && attempt < 4) {
+                if (lastStatus === 429 && attempt < 6) {
 
-                    const waitMs = 1500 * Math.pow(2, attempt);
+                    // Honor Retry-After header from Groq if present;
+                    // otherwise back off exponentially up to ~30 sec.
+                    const headerRetry = parseFloat(err.response?.headers?.["retry-after"]) || 0;
+                    const baseWait    = 2000 * Math.pow(2, attempt - 1);
+                    const waitMs      = Math.min(
+                        Math.max(headerRetry * 1000, baseWait),
+                        30000
+                    );
+
                     console.log(
-                        `/generate-calendar: Groq 429, retrying in ${waitMs}ms`
+                        `/generate-calendar: Groq 429, retrying in ${waitMs}ms (attempt ${attempt}/6)`
                     );
                     await new Promise(r => setTimeout(r, waitMs));
                     continue;
@@ -996,9 +1004,33 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
 
         if (!raw) {
 
-            return res.status(503).json({
-                error: "Groq rate-limited (429). Wait a minute and try again.",
-                detail: lastErr?.response?.data || lastErr?.message
+            // Surface Groq's actual error so the user knows it's not Mongo
+            const groqMsg =
+                lastErr?.response?.data?.error?.message ||
+                lastErr?.message ||
+                "Unknown Groq error";
+
+            if (lastStatus === 429) {
+
+                return res.status(429).json({
+                    error: "Groq rate-limit reached. Wait 30-60 seconds and click again.",
+                    detail: groqMsg,
+                    source: "groq"
+                });
+            }
+
+            if (lastStatus === 401 || lastStatus === 403) {
+
+                return res.status(401).json({
+                    error: "Groq API key is invalid or unauthorized. Check GROQ_API_KEY in Render env.",
+                    detail: groqMsg,
+                    source: "groq"
+                });
+            }
+
+            return res.status(502).json({
+                error: "Could not reach Groq: " + groqMsg,
+                source: "groq"
             });
         }
 
@@ -1007,7 +1039,7 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape,
         if (!calendar.length) {
 
             return res.status(502).json({
-                error: "Groq returned an unparseable calendar. Try again."
+                error: "Groq returned an unparseable calendar. Click again to retry."
             });
         }
 

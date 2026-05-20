@@ -376,9 +376,18 @@ async function generateCalendar() {
     );
 
     if (!client) {
-
         alert("Pick a client first");
         return;
+    }
+
+    const btn = document.getElementById("generateCalendarBtn");
+    if (btn && btn.disabled) {
+        // already in flight — guard against rapid double-clicks
+        return;
+    }
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "⏳ Generating… (up to 30 sec)";
     }
 
     addAutomationLog(
@@ -396,19 +405,28 @@ async function generateCalendar() {
 
         const data = await response.json();
 
-        // Server may return either a calendar array OR {error: "..."}
         if (!response.ok || !Array.isArray(data)) {
 
             const msg = data?.error || ("HTTP " + response.status);
+            const detail = data?.detail ? ` (${data.detail})` : "";
+
+            // Tailor the message based on what failed
+            let helpText;
+            if (response.status === 429 || data?.source === "groq") {
+                helpText = "Wait 30-60 seconds before clicking again — Groq's free tier has a request-per-minute limit.";
+            } else if (response.status === 503) {
+                helpText = "Database is reconnecting. Try again in 10 seconds.";
+            } else if (response.status === 401) {
+                helpText = "Groq API key needs to be fixed in Render env.";
+            } else {
+                helpText = "Click again to retry.";
+            }
 
             addAutomationLog(
-                "Calendar generation failed: " + msg +
-                " — try again in a minute (Groq rate limit).",
+                "Calendar generation failed: " + msg + detail + " — " + helpText,
                 "err"
             );
 
-            // Still try to load any previously saved calendar so
-            // the user sees something instead of an empty screen.
             await loadSavedCalendar();
             return;
         }
@@ -423,6 +441,13 @@ async function generateCalendar() {
     } catch (err) {
 
         addAutomationLog("Calendar failed: " + err.message, "err");
+
+    } finally {
+
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Generate Calendar";
+        }
     }
 }
 
