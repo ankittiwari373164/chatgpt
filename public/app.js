@@ -339,6 +339,7 @@ async function saveClient() {
         cta:         $("cta").value.trim(),
         website:     $("website")?.value.trim()     || "",
         description: $("description")?.value.trim() || "",
+        chatLink:    $("chatLink")?.value.trim()    || "",
         postSize:    getRadio("postSize") || "1:1",
         postDays:    getRadio("postDays") || "mwf"
     };
@@ -358,6 +359,17 @@ async function saveClient() {
         payload.footerUrl = "__REMOVE__";
     } else if (window.__pendingFooterData) {
         payload.footerDataUrl = window.__pendingFooterData;
+    }
+
+    // Sample posts:
+    //   - window.__pendingSamplesDataUrls = [base64s] → upload + append
+    //   - window.__currentSampleUrls (set on edit) = [URLs] → preserved/edited list
+    if (Array.isArray(window.__pendingSamplesDataUrls) && window.__pendingSamplesDataUrls.length) {
+        payload.samplePostsDataUrls = window.__pendingSamplesDataUrls;
+    }
+    if (Array.isArray(window.__currentSampleUrls)) {
+        // User may have removed some via remove buttons → send the final list as replacement
+        payload.samplePostsUrls = window.__currentSampleUrls;
     }
 
     const btn = document.querySelector('[onclick="saveClient()"]');
@@ -415,6 +427,7 @@ async function editClient(encodedName) {
         set("cta",         c.cta);
         set("website",     c.website);
         set("description", c.description);
+        set("chatLink",    c.chatLink);
 
         const nameEl = document.getElementById("name");
         if (nameEl) nameEl.disabled = true;
@@ -428,6 +441,9 @@ async function editClient(encodedName) {
 
         window.__pendingLogoData = null;
         window.__pendingFooterData = null;
+        window.__pendingSamplesDataUrls = null;
+        window.__currentSampleUrls = Array.isArray(c.samplePosts) ? [...c.samplePosts] : [];
+
         const lp = document.getElementById("logoPreview");
         const fp = document.getElementById("footerPreview");
         const ls = document.getElementById("logoStatus");
@@ -447,6 +463,8 @@ async function editClient(encodedName) {
             if (fs) fs.textContent = "No file chosen";
         }
 
+        renderSamplePreviews();
+
         const eb = document.getElementById("editingBadge");
         const cb = document.getElementById("cancelEditBtn");
         if (eb) eb.style.display = "inline";
@@ -463,7 +481,7 @@ async function editClient(encodedName) {
 
 function cancelEdit() {
 
-    ["name","industry","tone","audience","services","style","cta","website","description"]
+    ["name","industry","tone","audience","services","style","cta","website","description","chatLink"]
         .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
 
     const nameEl = document.getElementById("name");
@@ -475,6 +493,13 @@ function cancelEdit() {
     if (ddR) ddR.checked = true;
 
     resetLogoFooterUI();
+
+    // Reset samples
+    window.__pendingSamplesDataUrls = null;
+    window.__currentSampleUrls = [];
+    renderSamplePreviews();
+    const sf = document.getElementById("sampleFiles");
+    if (sf) sf.value = "";
 
     const eb = document.getElementById("editingBadge");
     const cb = document.getElementById("cancelEditBtn");
@@ -516,6 +541,229 @@ async function refreshProducts(encodedName) {
         addAutomationLog(`❌ Scrape failed: ${e.message}`, "err");
     }
 }
+
+/* ============================================================
+   SAMPLE POSTS — handlers
+============================================================ */
+
+window.__pendingSamplesDataUrls = null;
+window.__currentSampleUrls = [];
+
+function onSamplesChosen(input) {
+
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+
+    const dataUrls = [];
+    let pending = files.length;
+
+    files.forEach(f => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            dataUrls.push(reader.result);
+            if (--pending === 0) {
+                window.__pendingSamplesDataUrls =
+                    (window.__pendingSamplesDataUrls || []).concat(dataUrls);
+                renderSamplePreviews();
+            }
+        };
+        reader.onerror = () => {
+            if (--pending === 0) renderSamplePreviews();
+        };
+        reader.readAsDataURL(f);
+    });
+}
+
+function renderSamplePreviews() {
+
+    const box = document.getElementById("samplePreviews");
+    const status = document.getElementById("sampleStatus");
+    const placeholder = document.getElementById("samplePlaceholder");
+    if (!box) return;
+
+    const existing = window.__currentSampleUrls || [];
+    const pending  = window.__pendingSamplesDataUrls || [];
+    const total = existing.length + pending.length;
+
+    if (status) status.textContent = total + " sample" + (total === 1 ? "" : "s");
+
+    if (!total) {
+        box.innerHTML = '<span id="samplePlaceholder" style="color:#444; font-size:11px; align-self:center; margin:0 auto;">No samples yet</span>';
+        return;
+    }
+
+    let html = "";
+
+    existing.forEach((url, i) => {
+        html += `
+        <div style="position:relative; width:80px; height:80px;">
+            <img src="${escapeHTML(url)}"
+                style="width:80px; height:80px; object-fit:cover; border-radius:6px; border:1px solid #2a2a2a;">
+            <button
+                onclick="removeExistingSample(${i})"
+                style="position:absolute; top:-6px; right:-6px; width:20px; height:20px;
+                       background:#3a1010; border:1px solid #5a2020;
+                       color:#ffaaaa; border-radius:50%; cursor:pointer;
+                       font-size:11px; line-height:1; padding:0;"
+                title="Remove">×</button>
+        </div>`;
+    });
+
+    pending.forEach((dataUrl, i) => {
+        html += `
+        <div style="position:relative; width:80px; height:80px;">
+            <img src="${dataUrl}"
+                style="width:80px; height:80px; object-fit:cover; border-radius:6px;
+                       border:1px solid #3a3a1a; opacity:0.85;"
+                title="Pending upload">
+            <span style="position:absolute; bottom:2px; left:2px; right:2px;
+                         font-size:9px; color:#fc7; background:rgba(0,0,0,0.7);
+                         padding:1px 3px; border-radius:3px; text-align:center;">
+                pending
+            </span>
+            <button
+                onclick="removePendingSample(${i})"
+                style="position:absolute; top:-6px; right:-6px; width:20px; height:20px;
+                       background:#3a1010; border:1px solid #5a2020;
+                       color:#ffaaaa; border-radius:50%; cursor:pointer;
+                       font-size:11px; line-height:1; padding:0;"
+                title="Cancel">×</button>
+        </div>`;
+    });
+
+    box.innerHTML = html;
+}
+
+function removeExistingSample(i) {
+    window.__currentSampleUrls.splice(i, 1);
+    renderSamplePreviews();
+}
+
+function removePendingSample(i) {
+    window.__pendingSamplesDataUrls.splice(i, 1);
+    renderSamplePreviews();
+}
+
+/* ============================================================
+   INSTAGRAM PUBLISH QUEUE
+============================================================ */
+
+async function refreshIgQueue() {
+
+    try {
+
+        const r = await fetch("/ig-queue");
+        const d = await r.json();
+
+        const list = document.getElementById("igQueueList");
+        const countEl = document.getElementById("igQueueCount");
+
+        const items = d.items || [];
+        if (countEl) countEl.textContent = items.length;
+
+        if (!items.length) {
+            list.innerHTML = `
+                <div style="background:#161616; border:1px dashed #2a2a2a; border-radius:8px;
+                            padding:24px; text-align:center; color:#666;">
+                    No Instagram posts queued.
+                    <div style="font-size:11px; color:#444; margin-top:4px;">
+                        Posts appear here while waiting to publish.
+                    </div>
+                </div>`;
+            return;
+        }
+
+        const now = Date.now();
+
+        list.innerHTML = items.map(job => {
+
+            const due = new Date(job.scheduledAt);
+            const msUntil = due.getTime() - now;
+            const status = job.status;
+
+            const statusColor =
+                status === "processing" ? "#7eaaff"
+              : status === "pending"    ? "#ffd97e"
+              : status === "done"       ? "#7eff7e"
+              : status === "failed"     ? "#ff7e7e"
+              :                            "#888";
+
+            const countdownText =
+                status === "processing" ? "publishing now…"
+              : msUntil < 0             ? "due — firing"
+              : msUntil < 60000         ? "< 1 min"
+              : msUntil < 3600000       ? Math.floor(msUntil / 60000) + " min"
+              : msUntil < 86400000      ? Math.floor(msUntil / 3600000) + " hr"
+              :                            Math.floor(msUntil / 86400000) + " days";
+
+            return `
+            <div style="background:#161616; border:1px solid #2a2a2a; border-radius:8px;
+                        padding:12px 14px; margin-bottom:6px; display:flex; gap:12px; align-items:center;">
+                ${job.mediaUrl
+                    ? `<img src="${escapeHTML(job.mediaUrl)}" style="width:48px; height:48px;
+                        object-fit:cover; border-radius:6px; border:1px solid #2a2a2a; flex-shrink:0;">`
+                    : ''}
+                <div style="flex:1; min-width:0;">
+                    <div style="font-weight:600; font-size:13px;">${escapeHTML(job.accountName || job.client || "?")}</div>
+                    <div style="font-size:11px; color:#888; margin-top:2px; overflow:hidden;
+                                text-overflow:ellipsis; white-space:nowrap; max-width:420px;">
+                        ${escapeHTML(String(job.caption || "").slice(0, 80))}
+                    </div>
+                    <div style="font-size:11px; margin-top:4px;">
+                        <span style="color:${statusColor};">● ${status}</span>
+                        <span style="color:#666; margin-left:8px;">→ ${due.toLocaleString()}</span>
+                        ${status === "pending" || status === "processing"
+                            ? `<span style="color:#7eaaff; margin-left:8px;">(${countdownText})</span>`
+                            : ''}
+                    </div>
+                    ${job.error
+                        ? `<div style="font-size:11px; color:#ff7e7e; margin-top:2px;">${escapeHTML(job.error.slice(0, 200))}</div>`
+                        : ''}
+                </div>
+                ${(status === "pending" || status === "processing")
+                    ? `<button
+                        onclick="cancelIgJob('${job.jobId}')"
+                        style="background:#3a1010; border:1px solid #5a2020;
+                               color:#ffaaaa; padding:7px 12px; border-radius:6px;
+                               cursor:pointer; font-size:12px; flex-shrink:0;">
+                        🗑 Cancel
+                    </button>`
+                    : ''}
+            </div>`;
+        }).join("");
+
+    } catch (e) {
+
+        const list = document.getElementById("igQueueList");
+        if (list) list.innerHTML = `<div style="color:#ff7e7e; padding:10px;">Failed to load: ${escapeHTML(e.message)}</div>`;
+    }
+}
+
+async function cancelIgJob(jobId) {
+
+    if (!confirm("Cancel this Instagram post? It will not be published.")) return;
+
+    try {
+
+        const r = await fetch("/ig-queue/" + encodeURIComponent(jobId), { method: "DELETE" });
+        const d = await r.json();
+
+        if (d.success) {
+            addAutomationLog(`✓ Canceled Instagram post ${jobId}`, "ok");
+            refreshIgQueue();
+        } else {
+            addAutomationLog(`❌ Cancel failed: ${d.error || "unknown"}`, "err");
+        }
+
+    } catch (e) {
+        addAutomationLog(`❌ Cancel failed: ${e.message}`, "err");
+    }
+}
+
+// Auto-refresh the IG queue every 30 sec
+setInterval(() => {
+    if (document.getElementById("igQueueList")) refreshIgQueue();
+}, 30000);
 
 /* ============================================================
    CALENDAR

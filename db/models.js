@@ -20,13 +20,15 @@ const ClientSchema = new Schema({
     services:    String,
     style:       String,
     cta:         String,
-    description: String,             // long-form business description
-    website:     String,             // public website URL
-    postSize:    { type: String, default: "1:1" },  // "1:1" | "4:5" | "9:16"
-    postDays:    { type: String, default: "mwf" },  // "mwf" | "mtwtfs" | "daily"
+    description: String,
+    website:     String,
+    postSize:    { type: String, default: "1:1" },
+    postDays:    { type: String, default: "mwf" },
     logoUrl:     String,
     footerUrl:   String,
-    productsCache: {                 // populated by scraper.js
+    samplePosts: [String],           // array of Cloudinary URLs for style references
+    chatLink:    String,             // permanent ChatGPT chat URL (https://chatgpt.com/c/<id>)
+    productsCache: {
         items:     [Schema.Types.Mixed],
         scrapedAt: Date,
         source:    String
@@ -135,6 +137,34 @@ const LogSchema = new Schema({
 
 LogSchema.index({ at: -1 });
 
+/* ---------- INSTAGRAM PUBLISH QUEUE ---------- */
+/* Each pending IG post: jobId, scheduled time, media URL + caption,
+   the IG account ID + page token to call media_publish with. The
+   server holds a setTimeout per pending job and fires it at the
+   right moment. Server restart → rearmIgQueue() re-schedules them. */
+
+const IgQueueSchema = new Schema({
+    jobId:       { type: String, required: true, unique: true, index: true },
+    client:      { type: String, index: true },
+    postId:      Number,                // _legacyId of the Post that created this
+    pageName:    String,                // human-readable for dashboard
+    accountName: String,                // e.g. "@brandhandle" for dashboard
+    igId:        String,                // IG Business Account ID
+    pageId:      String,                // FB Page ID (parent)
+    fbToken:     String,                // page token for IG publishing
+    caption:     String,
+    hashtags:    String,
+    mediaUrl:    String,                // publicly accessible URL (Cloudinary)
+    mediaType:   { type: String, default: "image" },  // "image" | "video"
+    scheduledAt: { type: Date, required: true, index: true },
+    status:      { type: String, default: "pending", index: true },
+                 // "pending" | "processing" | "done" | "failed" | "canceled"
+    metaPostId:  String,                // populated on success
+    error:       String,                // populated on failure
+    attempts:    { type: Number, default: 0 },
+    createdAt:   { type: Date, default: Date.now }
+});
+
 module.exports = {
     Client:    mongoose.model("Client",    ClientSchema),
     Prompt:    mongoose.model("Prompt",    PromptSchema),
@@ -144,5 +174,6 @@ module.exports = {
     Session:   mongoose.model("Session",   SessionSchema),
     MetaPage:  mongoose.model("MetaPage",  MetaPageSchema),
     RunLog:    mongoose.model("RunLog",    RunLogSchema),
-    Log:       mongoose.model("Log",       LogSchema)
+    Log:       mongoose.model("Log",       LogSchema),
+    IgQueue:   mongoose.model("IgQueue",   IgQueueSchema)
 };

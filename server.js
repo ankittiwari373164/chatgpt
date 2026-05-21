@@ -205,20 +205,24 @@ app.get("/current-task", requireMongo, async (req, res) => {
         if (!claimed) return res.json(null);
 
         // Look up the client to enrich the task with brand assets
-        let logoUrl = "", footerUrl = "";
+        let logoUrl = "", footerUrl = "", chatLink = "", samplePosts = [];
 
         try {
             const c = await Client.findOne({ name: claimed.client }).lean();
-            logoUrl   = c?.logoUrl   || "";
-            footerUrl = c?.footerUrl || "";
+            logoUrl     = c?.logoUrl   || "";
+            footerUrl   = c?.footerUrl || "";
+            chatLink    = c?.chatLink  || "";
+            samplePosts = Array.isArray(c?.samplePosts) ? c.samplePosts : [];
         } catch (_) {}
 
         res.json({
-            id:        claimed._legacyId || claimed._id,
-            client:    claimed.client,
-            prompt:    claimed.prompt,
+            id:          claimed._legacyId || claimed._id,
+            client:      claimed.client,
+            prompt:      claimed.prompt,
             logoUrl,
-            footerUrl
+            footerUrl,
+            chatLink,
+            samplePosts
         });
 
     } catch (err) {
@@ -799,7 +803,8 @@ app.post("/save-client", requireMongo, async (req, res) => {
             description: b.description || "",
             website:     (b.website     || "").trim(),
             postSize:    b.postSize    || "1:1",
-            postDays:    b.postDays    || "mwf"
+            postDays:    b.postDays    || "mwf",
+            chatLink:    (b.chatLink   || "").trim()
         };
 
         /* Logo */
@@ -841,10 +846,39 @@ app.post("/save-client", requireMongo, async (req, res) => {
             fields.footerUrl = b.footerUrl.trim();
         }
 
+        /* Sample posts — accepts array of data URLs OR array of plain URLs.
+           Appends to existing samplePosts; use __REMOVE_SAMPLES__ to clear. */
+
+        if (Array.isArray(b.samplePostsDataUrls) && b.samplePostsDataUrls.length) {
+
+            const existing = (await Client.findOne({ name }).lean())?.samplePosts || [];
+            const newUrls  = [];
+
+            for (let i = 0; i < b.samplePostsDataUrls.length; i++) {
+                try {
+                    const url = await uploadDataUrl(
+                        b.samplePostsDataUrls[i],
+                        "sample-" + i
+                    );
+                    if (url) newUrls.push(url);
+                } catch (e) {
+                    console.log(`Sample ${i} upload failed: ${e.message}`);
+                }
+            }
+
+            fields.samplePosts = [...existing, ...newUrls];
+
+        } else if (Array.isArray(b.samplePostsUrls)) {
+
+            // Explicit replacement with a final list (used by Remove buttons)
+            fields.samplePosts = b.samplePostsUrls.filter(Boolean);
+        }
+
         /* ---------- Special clears: "REMOVE" sentinel deletes the field ---------- */
 
-        if (b.logoUrl === "__REMOVE__")   fields.logoUrl   = "";
-        if (b.footerUrl === "__REMOVE__") fields.footerUrl = "";
+        if (b.logoUrl === "__REMOVE__")    fields.logoUrl   = "";
+        if (b.footerUrl === "__REMOVE__")  fields.footerUrl = "";
+        if (b.samplePosts === "__REMOVE_SAMPLES__") fields.samplePosts = [];
 
         /* ---------- Upsert ---------- */
 
@@ -1187,27 +1221,75 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
             });
         }
 
-        /* Filter to dates that match the postDays pattern.
-           Defense in depth: Groq sometimes ignores the constraint. */
+        /* ============================================================
+           Generate the CORRECT schedule of dates ourselves based on
+           postDays, then assign Groq's topics in order. This way the
+           schedule is guaranteed to match the configured day pattern
+           regardless of what dates Groq returns.
+
+           Strategy:
+             - Start from today (or tomorrow if today isn't a posting day)
+             - Walk forward day-by-day, collecting dates whose weekday
+               is in the allowed set
+             - Stop when we have cfg.count dates
+             - Assign Groq topics in order to those dates
+        ============================================================ */
 
         const allowedDayIdx = {
-            "mwf":    new Set([1, 3, 5]),       // Mon, Wed, Fri
-            "mtwtfs": new Set([1, 2, 3, 4, 5, 6]),
-            "daily":  new Set([0, 1, 2, 3, 4, 5, 6])
+            "mwf":    new Set([1, 3, 5]),            // Mon, Wed, Fri
+            "mtwtfs": new Set([1, 2, 3, 4, 5, 6]),   // Mon-Sat
+            "daily":  new Set([0, 1, 2, 3, 4, 5, 6]) // Sun-Sat
         };
 
         const allowed = allowedDayIdx[postDays] || allowedDayIdx.mwf;
 
-        const calendar = calendarRaw.filter(item => {
-            if (!item.date) return false;
-            const d = new Date(item.date + "T00:00:00");
-            if (isNaN(d)) return false;
-            return allowed.has(d.getDay());
+        function fmtYMD(d) {
+            const y  = d.getUTCFullYear();
+            const m  = String(d.getUTCMonth() + 1).padStart(2, "0");
+            const dd = String(d.getUTCDate()).padStart(2, "0");
+            return `${y}-${m}-${dd}`;
+        }
+
+        const scheduledDates = [];
+        const start = new Date();
+        // Normalize to UTC midnight so getUTCDay is stable
+        const cursor = new Date(Date.UTC(
+            start.getUTCFullYear(),
+            start.getUTCMonth(),
+            start.getUTCDate()
+        ));
+
+        const HARD_CAP_DAYS = 60; // safety limit so we never loop forever
+        let walked = 0;
+
+        while (scheduledDates.length < cfg.count && walked < HARD_CAP_DAYS) {
+
+            if (allowed.has(cursor.getUTCDay())) {
+                scheduledDates.push(fmtYMD(cursor));
+            }
+            cursor.setUTCDate(cursor.getUTCDate() + 1);
+            walked++;
+        }
+
+        /* Assign Groq's topics to our calculated dates in order.
+           If Groq returned fewer topics than dates, the extras are
+           assigned generic topics. If more, the extras are dropped. */
+
+        const calendar = scheduledDates.map((date, i) => {
+
+            const src = calendarRaw[i] || {};
+
+            return {
+                date,
+                event: String(src.event || "").trim(),
+                topic: String(src.topic || `Post ${i + 1}`).trim(),
+                goal:  String(src.goal  || "").trim()
+            };
         });
 
         if (!calendar.length) {
             return res.status(502).json({
-                error: "Groq returned entries but none matched your posting schedule. Click again to retry."
+                error: "Could not build a calendar — internal error"
             });
         }
 
@@ -1219,7 +1301,7 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
 
         console.log(
             `📅 Saved calendar for "${client.name}" — ${calendar.length} items ` +
-            `(filtered ${calendarRaw.length - calendar.length} off-schedule)`
+            `(rebuilt dates: ${postDays}, ${cfg.count} per month)`
         );
 
         res.json(calendar);
@@ -1834,6 +1916,59 @@ app.post("/generate-all-now", requireMongo, async (req, res) => {
    refresh.
 ============================================================ */
 
+/* ============================================================
+   INSTAGRAM PUBLISH QUEUE — list + cancel
+============================================================ */
+
+app.get("/ig-queue", requireMongo, async (req, res) => {
+
+    try {
+
+        const igQueue = require("./lib/igQueue");
+
+        const showAll = String(req.query.all || "").toLowerCase() === "true";
+
+        const items = showAll
+            ? await igQueue.listAll(50)
+            : await igQueue.listPending();
+
+        // Strip the page token before sending to the client — security
+        const cleaned = items.map(j => {
+            const { fbToken, ...rest } = j;
+            return rest;
+        });
+
+        res.json({ items: cleaned, count: cleaned.length });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete("/ig-queue/:jobId", requireMongo, async (req, res) => {
+
+    try {
+
+        const igQueue = require("./lib/igQueue");
+
+        const job = await igQueue.cancel(req.params.jobId);
+
+        if (!job) return res.status(404).json({ error: "Job not found" });
+
+        console.log(`[ig-queue] User canceled ${req.params.jobId}`);
+
+        broadcast("ig-canceled", {
+            jobId: job.jobId,
+            client: job.client
+        });
+
+        res.json({ success: true, jobId: job.jobId, status: job.status });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get("/calendar/:client", requireMongo, async (req, res) => {
 
     try {
@@ -2104,6 +2239,17 @@ app.post("/save", requireMongo, handleSavePost);
 
         await connect();
         dailyCron.start();
+
+        // Expose SSE broadcaster so igQueue can publish events
+        global.__sseBroadcast = (payload) => broadcast(payload.type || "event", payload);
+
+        // Rearm any pending IG queue jobs from a previous boot
+        try {
+            const igQueue = require("./lib/igQueue");
+            await igQueue.rearm();
+        } catch (e) {
+            console.log("Could not rearm IG queue:", e.message);
+        }
 
         // ── Startup health checks (non-blocking) ──
         setTimeout(runStartupChecks, 3000);

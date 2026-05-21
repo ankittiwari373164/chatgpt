@@ -130,6 +130,7 @@ content="width=device-width, initial-scale=1.0"
             <input id="style"    placeholder="Visual Style (e.g. minimal, vibrant)">
             <input id="cta"      placeholder="CTA (e.g. Book Now)">
             <input id="website"  placeholder="Website URL (https://...)">
+            <input id="chatLink" placeholder="ChatGPT Chat URL (https://chatgpt.com/c/...)">
 
         </div>
 
@@ -244,10 +245,33 @@ content="width=device-width, initial-scale=1.0"
 
         </div>
 
+        <!-- SAMPLE POSTS (style references) -->
+        <div style="margin-top:14px; background:#161616; border:1px solid #2a2a2a; border-radius:8px; padding:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span style="font-size:13px; font-weight:600;">🖼️ Sample Posts <span style="color:#888; font-weight:normal;">(style references — attached to ChatGPT so it imitates the look)</span></span>
+                <span id="sampleStatus" style="font-size:12px; color:#888;">0 samples</span>
+            </div>
+            <input
+                type="file"
+                id="sampleFiles"
+                accept="image/png,image/jpeg,image/jpg,image/webp"
+                multiple
+                onchange="onSamplesChosen(this)"
+                style="width:100%; font-size:12px; color:#aaa;">
+            <div id="samplePreviews"
+                style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; min-height:60px; padding:6px; background:#0e0e0e; border-radius:6px;">
+                <span id="samplePlaceholder" style="color:#444; font-size:11px; align-self:center; margin:0 auto;">No samples yet</span>
+            </div>
+            <p class="subtext" style="margin-top:8px; font-size:11px;">
+                Upload 1-4 reference images showing the visual style you want for this client.
+                Each one will be attached to ChatGPT before the prompt is sent, so the model can imitate the style.
+            </p>
+        </div>
+
         <p class="subtext" style="margin-top:10px;">
             Files upload to Cloudinary when you save. The resulting URLs are sent to
             ChatGPT with every prompt so the generated image incorporates them.
-            <strong>To edit a saved client</strong>, type the same Brand Name and save — existing logo/footer stays unless you upload a replacement or click Remove.
+            <strong>To edit a saved client</strong>, type the same Brand Name and save — existing logo/footer/samples stay unless you upload replacements.
         </p>
 
         <button class="main-btn" onclick="saveClient()" style="margin-top:14px;">
@@ -298,6 +322,34 @@ content="width=device-width, initial-scale=1.0"
         </p>
 
         <div id="calendar"></div>
+
+    </div>
+
+    <!-- =========================
+         INSTAGRAM PUBLISH QUEUE
+    ========================== -->
+
+    <div class="section">
+
+        <h2 style="display:flex; justify-content:space-between; align-items:center;">
+            <span>📸 Instagram Publish Queue</span>
+            <span style="font-size:13px; color:#888; font-weight:normal;">
+                <span id="igQueueCount">0</span> queued
+                <button onclick="refreshIgQueue()"
+                    style="margin-left:8px; font-size:12px; padding:5px 11px;
+                           background:#1d2435; border:1px solid #2c3a52;
+                           color:#aac; border-radius:5px; cursor:pointer;">
+                    ↺ Refresh
+                </button>
+            </span>
+        </h2>
+
+        <p class="subtext" style="margin-bottom:10px;">
+            Posts to Instagram are queued on the server until their scheduled time, then published via the Graph API.
+            Click 🗑 to cancel a queued post.
+        </p>
+
+        <div id="igQueueList"></div>
 
     </div>
 
