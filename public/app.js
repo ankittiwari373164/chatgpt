@@ -118,6 +118,7 @@ function renderClientsList(clients) {
     box.innerHTML = clients.map(c => {
 
         const pillCount = c.productsCache?.items?.length || 0;
+        const sampleCount = Array.isArray(c.samplePosts) ? c.samplePosts.length : 0;
         const sz = c.postSize || "1:1";
         const dd = c.postDays || "mwf";
         const ddLabel = dd === "mwf" ? "MWF" : dd === "mtwtfs" ? "Mon→Sat" : "Daily";
@@ -134,6 +135,8 @@ function renderClientsList(clients) {
                     <span style="color:#7eaaff;">· ${escapeHTML(sz)}</span>
                     <span style="color:#7eaaff;">· ${escapeHTML(ddLabel)}</span>
                     ${pillCount ? `<span style="color:#7eff7e;">· ${pillCount} products</span>` : ''}
+                    ${sampleCount ? `<span style="color:#ffd97e;">· ${sampleCount} sample${sampleCount > 1 ? "s" : ""}</span>` : ''}
+                    ${c.chatLink ? `<span style="color:#888;">· <a href="${escapeHTML(c.chatLink)}" target="_blank" style="color:#7eaaff;">chat</a></span>` : ''}
                     ${c.website ? `<span style="color:#666;">· <a href="${escapeHTML(c.website)}" target="_blank" style="color:#7eaaff;">site</a></span>` : ''}
                 </div>
             </div>
@@ -1851,6 +1854,32 @@ function connectSSE() {
         );
     });
 
+    /* ===== IG queue events ===== */
+
+    es.addEventListener("ig-published", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`✅ Instagram published — ${d.client} (${d.metaPostId})`, "ok");
+            refreshIgQueue();
+        } catch (_) {}
+    });
+
+    es.addEventListener("ig-failed", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`❌ Instagram publish failed — ${d.client}: ${d.error}`, "err");
+            refreshIgQueue();
+        } catch (_) {}
+    });
+
+    es.addEventListener("ig-canceled", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`✓ Instagram post canceled — ${d.client}`, "info");
+            refreshIgQueue();
+        } catch (_) {}
+    });
+
     es.addEventListener("pipeline-done", evt => {
 
         try {
@@ -2229,6 +2258,7 @@ async function clearLogs() {
     autoSelectTodayCustomDay();
 
     loadPosts();
+    refreshIgQueue();
     setInterval(loadPosts, 8000);
     setInterval(refreshQueuedPrompts, 10000); // refresh queued list every 10s
 
