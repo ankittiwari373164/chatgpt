@@ -1572,12 +1572,45 @@ app.post("/schedule-post", requireMongo, async (req, res) => {
         if (!post)        return res.json({ success: false, error: "Post not found" });
         if (!post.image)  return res.json({ success: false, error: "Post has no image" });
 
+        /* If the post is already scheduled, cancel its existing queue
+           jobs so we don't double-publish. Then proceed with the new
+           schedule. The dashboard treats this as a re-schedule. */
+
         if (post.scheduled === true) {
 
-            return res.json({
-                success: false,
-                error:   "Post is already scheduled."
-            });
+            try {
+
+                const { FbQueue, IgQueue } = require("./db/models");
+                const fbQueue = require("./lib/fbQueue");
+                const igQueue = require("./lib/igQueue");
+
+                const fbJobs = await FbQueue.find({
+                    postId,
+                    status: { $in: ["pending", "processing"] }
+                }).lean();
+
+                const igJobs = await IgQueue.find({
+                    postId,
+                    status: { $in: ["pending", "processing"] }
+                }).lean();
+
+                for (const j of fbJobs) await fbQueue.cancel(j.jobId);
+                for (const j of igJobs) await igQueue.cancel(j.jobId);
+
+                console.log(
+                    `Re-scheduling post ${postId}: canceled ` +
+                    `${fbJobs.length} FB + ${igJobs.length} IG queue job(s)`
+                );
+
+                broadcast("log", {
+                    level: "info",
+                    msg: `Re-scheduling post ${postId} — canceled ${fbJobs.length} FB + ${igJobs.length} IG queued job(s)`
+                });
+
+            } catch (e) {
+                console.log("Could not cancel old queue jobs:", e.message);
+                // continue anyway — better to potentially double-post than block forever
+            }
         }
 
         inFlightPosts.add(String(postId));

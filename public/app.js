@@ -2081,12 +2081,33 @@ async function loadPosts() {
             const card = document.createElement("div");
             card.className = "card";
 
+            const isScheduled = post.scheduled === true || post.status === "scheduled";
+
+            const scheduledLine = isScheduled && post.scheduleTime
+                ? `<p class="status-line scheduled" style="font-size:11px; color:#7eaaff;">
+                     📅 Scheduled for ${new Date(post.scheduleTime).toLocaleString()}
+                   </p>`
+                : '';
+
+            const buttonLabel = isScheduled
+                ? "🔄 Re-Schedule"
+                : "Schedule Manually";
+
+            const buttonStyle = isScheduled
+                ? 'style="background:#1d2435; border:1px solid #2c3a52; color:#aac;"'
+                : '';
+
+            const onclickCall = isScheduled
+                ? `confirmReschedule(${post.id})`
+                : `schedulePost(${post.id})`;
+
             card.innerHTML = `
               <img src="${escapeHTML(post.image)}">
               <h2>${escapeHTML(post.client || "—")}</h2>
               <p>${escapeHTML(post.caption || "")}</p>
               <p>${escapeHTML(post.hashtags || "")}</p>
               <p class="status-line ${post.status}">${post.status}</p>
+              ${scheduledLine}
               <div class="schedule-box">
                 <input
                 type="datetime-local"
@@ -2095,9 +2116,10 @@ async function loadPosts() {
                 >
                 <button
                 class="schedule-btn"
-                onclick="schedulePost(${post.id})"
+                ${buttonStyle}
+                onclick="${onclickCall}"
                 >
-                  Schedule Manually
+                  ${buttonLabel}
                 </button>
               </div>
             `;
@@ -2137,6 +2159,7 @@ async function schedulePost(id) {
 
         alert("Post scheduled ✓");
         loadPosts();
+        refreshAllQueues();
 
     } else {
 
@@ -2147,6 +2170,29 @@ async function schedulePost(id) {
                 : JSON.stringify(data.error))
         );
     }
+}
+
+/* Wrapper for re-scheduling an already-scheduled post.
+   Confirms with the user first since this cancels existing queue jobs. */
+
+function confirmReschedule(id) {
+
+    const timeInput = document.getElementById(`time-${id}`);
+    if (!timeInput || !timeInput.value) {
+        return alert("Pick a new schedule time first");
+    }
+
+    const newTime = new Date(timeInput.value).toLocaleString();
+
+    const ok = confirm(
+        `Re-schedule this post for ${newTime}?\n\n` +
+        `Any pending FB / Instagram queued jobs for this post will be canceled ` +
+        `and replaced with new ones at the new time.`
+    );
+
+    if (!ok) return;
+
+    schedulePost(id);
 }
 
 /* ============================================================
