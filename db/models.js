@@ -22,12 +22,18 @@ const ClientSchema = new Schema({
     cta:         String,
     description: String,
     website:     String,
+    phone:       String,
+    email:       String,
+    contactInCaption: { type: Boolean, default: true },    // append phone/email/website at end of caption
     postSize:    { type: String, default: "1:1" },
     postDays:    { type: String, default: "mwf" },
     logoUrl:     String,
     footerUrl:   String,
-    samplePosts: [String],           // array of Cloudinary URLs for style references
-    chatLink:    String,             // permanent ChatGPT chat URL (https://chatgpt.com/c/<id>)
+    samplePosts: [String],
+    chatLink:    String,
+    storyEnabled: { type: Boolean, default: false },       // post a Story alongside the feed post
+    songUrl:      String,                                  // Cloudinary URL of audio (mp3) for stories
+    songPublicId: String,                                  // Cloudinary public_id of the audio (for l_video overlay)
     productsCache: {
         items:     [Schema.Types.Mixed],
         scrapedAt: Date,
@@ -155,7 +161,7 @@ const IgQueueSchema = new Schema({
     caption:     String,
     hashtags:    String,
     mediaUrl:    String,                // publicly accessible URL (Cloudinary)
-    mediaType:   { type: String, default: "image" },  // "image" | "video"
+    mediaType:   { type: String, default: "image" },  // "image" | "video" | "story"
     scheduledAt: { type: Date, required: true, index: true },
     status:      { type: String, default: "pending", index: true },
                  // "pending" | "processing" | "done" | "failed" | "canceled"

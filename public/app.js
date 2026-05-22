@@ -142,6 +142,8 @@ function renderClientsList(clients) {
                     <span style="color:#7eaaff;">· ${escapeHTML(ddLabel)}</span>
                     ${pillCount ? `<span style="color:#7eff7e;">· ${pillCount} products</span>` : ''}
                     ${sampleCount ? `<span style="color:#ffd97e;">· ${sampleCount} sample${sampleCount > 1 ? "s" : ""}</span>` : ''}
+                    ${c.contactInCaption === false ? `<span style="color:#f88;">· 🚫 no contact in caption</span>` : ''}
+                    ${c.storyEnabled ? `<span style="color:#ff97e7;">· 📱 story${c.songUrl ? " 🎵" : ""}</span>` : ''}
                     ${c.chatLink ? `<span style="color:#888;">· <a href="${escapeHTML(c.chatLink)}" target="_blank" style="color:#7eaaff;">chat</a></span>` : ''}
                     ${c.website ? `<span style="color:#666;">· <a href="${escapeHTML(c.website)}" target="_blank" style="color:#7eaaff;">site</a></span>` : ''}
                 </div>
@@ -347,10 +349,14 @@ async function saveClient() {
         style:       $("style").value.trim(),
         cta:         $("cta").value.trim(),
         website:     $("website")?.value.trim()     || "",
+        phone:       $("phone")?.value.trim()       || "",
+        email:       $("email")?.value.trim()       || "",
         description: $("description")?.value.trim() || "",
         chatLink:    $("chatLink")?.value.trim()    || "",
         postSize:    getRadio("postSize") || "1:1",
-        postDays:    getRadio("postDays") || "mwf"
+        postDays:    getRadio("postDays") || "mwf",
+        contactInCaption: !!$("contactInCaption")?.checked,
+        storyEnabled:     !!$("storyEnabled")?.checked
     };
 
     if (!payload.name) {
@@ -379,6 +385,13 @@ async function saveClient() {
     if (Array.isArray(window.__currentSampleUrls)) {
         // User may have removed some via remove buttons → send the final list as replacement
         payload.samplePostsUrls = window.__currentSampleUrls;
+    }
+
+    // Song (audio file for stories)
+    if (window.__pendingSongData === "__REMOVE__") {
+        payload.songUrl = "__REMOVE__";
+    } else if (window.__pendingSongData) {
+        payload.songDataUrl = window.__pendingSongData;
     }
 
     const btn = document.querySelector('[onclick="saveClient()"]');
@@ -435,8 +448,22 @@ async function editClient(encodedName) {
         set("style",       c.style);
         set("cta",         c.cta);
         set("website",     c.website);
+        set("phone",       c.phone);
+        set("email",       c.email);
         set("description", c.description);
         set("chatLink",    c.chatLink);
+
+        const cic = document.getElementById("contactInCaption");
+        const sen = document.getElementById("storyEnabled");
+        // undefined = treat as ON (default for existing clients without the field)
+        if (cic) cic.checked = c.contactInCaption === undefined ? true : !!c.contactInCaption;
+        if (sen) sen.checked = !!c.storyEnabled;
+        toggleStoryPanel();
+
+        // Song
+        window.__pendingSongData = null;
+        window.__currentSongUrl = c.songUrl || "";
+        renderSongPreview();
 
         const nameEl = document.getElementById("name");
         if (nameEl) nameEl.disabled = true;
@@ -490,7 +517,7 @@ async function editClient(encodedName) {
 
 function cancelEdit() {
 
-    ["name","industry","tone","audience","services","style","cta","website","description","chatLink"]
+    ["name","industry","tone","audience","services","style","cta","website","phone","email","description","chatLink"]
         .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
 
     const nameEl = document.getElementById("name");
@@ -501,6 +528,12 @@ function cancelEdit() {
     if (szR) szR.checked = true;
     if (ddR) ddR.checked = true;
 
+    const cic = document.getElementById("contactInCaption");
+    const sen = document.getElementById("storyEnabled");
+    if (cic) cic.checked = true;    // default ON for new clients
+    if (sen) sen.checked = false;
+    toggleStoryPanel();
+
     resetLogoFooterUI();
 
     // Reset samples
@@ -509,6 +542,13 @@ function cancelEdit() {
     renderSamplePreviews();
     const sf = document.getElementById("sampleFiles");
     if (sf) sf.value = "";
+
+    // Reset song
+    window.__pendingSongData = null;
+    window.__currentSongUrl = "";
+    const sng = document.getElementById("songFile");
+    if (sng) sng.value = "";
+    renderSongPreview();
 
     const eb = document.getElementById("editingBadge");
     const cb = document.getElementById("cancelEditBtn");
@@ -654,6 +694,86 @@ function removePendingSample(i) {
 }
 
 /* ============================================================
+   SONG (audio file for stories)
+============================================================ */
+
+window.__pendingSongData = null;
+window.__currentSongUrl = "";
+
+function toggleStoryPanel() {
+    const enabled = !!document.getElementById("storyEnabled")?.checked;
+    const panel = document.getElementById("songPanel");
+    if (panel) panel.style.display = enabled ? "block" : "none";
+}
+
+function onSongChosen(input) {
+
+    const file = input.files && input.files[0];
+    if (!file) return;
+
+    // Soft size check — 30 MB IG max
+    if (file.size > 30 * 1024 * 1024) {
+        alert("Song is too large. Instagram limits audio to ~30 MB.");
+        input.value = "";
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+        window.__pendingSongData = reader.result;
+        renderSongPreview(file.name);
+    };
+    reader.onerror = () => alert("Could not read the audio file.");
+    reader.readAsDataURL(file);
+}
+
+function renderSongPreview(pendingName) {
+
+    const box = document.getElementById("songPreview");
+    if (!box) return;
+
+    if (window.__pendingSongData === "__REMOVE__") {
+        box.innerHTML = '<span style="color:#f88;">Song will be removed on save</span>';
+        return;
+    }
+
+    if (window.__pendingSongData) {
+        const name = pendingName || "new song";
+        box.innerHTML = `
+            <span style="color:#7eff7e;">🎵 ${escapeHTML(name)}</span>
+            <span style="color:#666; margin-left:6px; font-size:11px;">(pending upload)</span>`;
+        return;
+    }
+
+    if (window.__currentSongUrl) {
+        const fileName = window.__currentSongUrl.split("/").pop() || "song.mp3";
+        box.innerHTML = `
+            <audio src="${escapeHTML(window.__currentSongUrl)}" controls
+                style="width:100%; height:32px; margin-bottom:6px;"></audio>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                <span style="color:#888; font-size:11px;">${escapeHTML(fileName)}</span>
+                <button onclick="removeSong()"
+                    style="background:#3a1010; border:1px solid #5a2020;
+                           color:#ffaaaa; padding:4px 10px; border-radius:5px;
+                           cursor:pointer; font-size:11px;">
+                    × Remove
+                </button>
+            </div>`;
+        return;
+    }
+
+    box.innerHTML = 'No song set';
+}
+
+function removeSong() {
+    window.__pendingSongData = "__REMOVE__";
+    window.__currentSongUrl = "";
+    const sf = document.getElementById("songFile");
+    if (sf) sf.value = "";
+    renderSongPreview();
+}
+
+/* ============================================================
    INSTAGRAM PUBLISH QUEUE
 ============================================================ */
 
@@ -723,13 +843,18 @@ async function refreshQueue(platform) {
                 <div style="flex:1; min-width:0;">
                     <div style="font-weight:600; font-size:13px;">
                         ${escapeHTML(job.accountName || job.pageName || job.client || "?")}
+                        ${job.mediaType === "story"
+                            ? '<span style="font-size:10px; background:#ff97e7; color:#400022; padding:1px 6px; border-radius:8px; margin-left:6px; font-weight:600;">STORY</span>'
+                            : ''}
                         <span style="font-size:10px; color:#666; font-weight:normal; margin-left:6px;">
                             ${job.client && job.client !== job.accountName ? '· ' + escapeHTML(job.client) : ''}
                         </span>
                     </div>
                     <div style="font-size:11px; color:#888; margin-top:2px; overflow:hidden;
                                 text-overflow:ellipsis; white-space:nowrap; max-width:420px;">
-                        ${escapeHTML(String(job.caption || "").slice(0, 80))}
+                        ${job.mediaType === "story"
+                            ? '<em>Instagram Story (24h)' + (job.mediaUrl?.endsWith('.mp4') ? ' · with audio' : '') + '</em>'
+                            : escapeHTML(String(job.caption || "").slice(0, 80))}
                     </div>
                     <div style="font-size:11px; margin-top:4px;">
                         <span style="color:${statusColor};">● ${status}</span>

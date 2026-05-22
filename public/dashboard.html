@@ -130,6 +130,8 @@ content="width=device-width, initial-scale=1.0"
             <input id="style"    placeholder="Visual Style (e.g. minimal, vibrant)">
             <input id="cta"      placeholder="CTA (e.g. Book Now)">
             <input id="website"  placeholder="Website URL (https://...)">
+            <input id="phone"    placeholder="Phone (e.g. +91 98765 43210)">
+            <input id="email"    placeholder="Email (brand@example.com)">
             <input id="chatLink" placeholder="ChatGPT Chat URL (https://chatgpt.com/c/...)">
 
         </div>
@@ -266,6 +268,45 @@ content="width=device-width, initial-scale=1.0"
                 Upload 1-4 reference images showing the visual style you want for this client.
                 Each one will be attached to ChatGPT before the prompt is sent, so the model can imitate the style.
             </p>
+        </div>
+
+        <!-- CAPTION CONFIG -->
+        <div style="margin-top:14px; background:#161616; border:1px solid #2a2a2a; border-radius:8px; padding:14px;">
+            <div style="font-size:13px; font-weight:600; margin-bottom:8px;">📝 Caption Settings</div>
+            <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:13px;">
+                <input type="checkbox" id="contactInCaption" checked style="width:16px; height:16px; cursor:pointer;">
+                <span>
+                    Include contact details at the end of every caption
+                    <span style="color:#888; font-size:11px;">(phone, email, website — only those that are filled in above. Uncheck to disable for this client.)</span>
+                </span>
+            </label>
+        </div>
+
+        <!-- STORY + SONG CONFIG -->
+        <div style="margin-top:14px; background:#161616; border:1px solid #2a2a2a; border-radius:8px; padding:14px;">
+            <div style="font-size:13px; font-weight:600; margin-bottom:8px;">🎵 Instagram Story (optional)</div>
+            <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:13px; margin-bottom:10px;">
+                <input type="checkbox" id="storyEnabled" style="width:16px; height:16px; cursor:pointer;" onchange="toggleStoryPanel()">
+                <span>
+                    Also post a Story when this client's post publishes
+                    <span style="color:#888; font-size:11px;">(uses the same image; audio baked in if a song is set)</span>
+                </span>
+            </label>
+            <div id="songPanel" style="display:none;">
+                <label style="font-size:12px; color:#888; display:block; margin-bottom:4px;">
+                    🎶 Background Song <span style="color:#666;">(mp3 file, max ~30 MB)</span>
+                </label>
+                <input
+                    type="file"
+                    id="songFile"
+                    accept="audio/mp3,audio/mpeg,audio/wav,audio/m4a"
+                    onchange="onSongChosen(this)"
+                    style="width:100%; font-size:12px; color:#aaa;">
+                <div id="songPreview"
+                    style="margin-top:8px; padding:8px; background:#0e0e0e; border-radius:6px; min-height:32px; font-size:12px; color:#888;">
+                    No song set
+                </div>
+            </div>
         </div>
 
         <p class="subtext" style="margin-top:10px;">

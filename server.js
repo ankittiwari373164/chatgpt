@@ -764,30 +764,43 @@ app.post("/save-client", requireMongo, async (req, res) => {
             return res.status(400).json({ success: false, error: "name required" });
         }
 
-        /* ---------- Helper: upload a data URL to Cloudinary ---------- */
+        /* ---------- Helper: upload a data URL to Cloudinary ----------
+           Auto-detects audio (Cloudinary treats audio as resource_type=video). */
 
         async function uploadDataUrl(dataUrl, label) {
 
             if (!dataUrl || typeof dataUrl !== "string") return null;
-            if (!dataUrl.startsWith("data:")) return null; // not an upload payload
+            if (!dataUrl.startsWith("data:")) return null;
 
             if (!process.env.CLOUDINARY_CLOUD_NAME) {
                 throw new Error("Cloudinary is not configured on the server.");
             }
 
-            const r = await cloudinary.uploader.upload(dataUrl, {
+            const isAudio = /^data:audio\//i.test(dataUrl);
+
+            const opts = {
                 folder:    "ai-content/clients/" + name.replace(/[^a-z0-9_-]/gi, "_"),
                 public_id: label + "-" + Date.now(),
                 overwrite: true
-            });
+            };
+
+            if (isAudio) opts.resource_type = "video";
+
+            const r = await cloudinary.uploader.upload(dataUrl, opts);
 
             if (!r || !r.secure_url) {
                 console.log(`Cloudinary returned no secure_url for ${label}:`, r);
                 throw new Error("Cloudinary upload returned no URL");
             }
 
-            console.log(`☁ ${label} uploaded → ${r.secure_url} (${r.width}x${r.height}, ${r.bytes} bytes)`);
-            return r.secure_url;
+            console.log(
+                `☁ ${label} uploaded → ${r.secure_url} ` +
+                `(${r.width || "?"}x${r.height || "?"}, ${r.bytes} bytes, ${isAudio ? "audio" : "image"})`
+            );
+
+            // Return both URL and public_id; callers that just want
+            // the URL can do `.secure_url`.
+            return { secure_url: r.secure_url, public_id: r.public_id };
         }
 
         /* ---------- Build the update document ---------- */
@@ -802,18 +815,24 @@ app.post("/save-client", requireMongo, async (req, res) => {
             cta:         b.cta         || "",
             description: b.description || "",
             website:     (b.website     || "").trim(),
+            phone:       (b.phone       || "").trim(),
+            email:       (b.email       || "").trim(),
             postSize:    b.postSize    || "1:1",
             postDays:    b.postDays    || "mwf",
             chatLink:    (b.chatLink   || "").trim()
         };
+
+        // Only overwrite booleans if the caller actually sent them
+        if (typeof b.contactInCaption === "boolean") fields.contactInCaption = b.contactInCaption;
+        if (typeof b.storyEnabled     === "boolean") fields.storyEnabled     = b.storyEnabled;
 
         /* Logo */
 
         if (b.logoDataUrl) {
 
             try {
-                const url = await uploadDataUrl(b.logoDataUrl, "logo");
-                if (url) fields.logoUrl = url;
+                const u = await uploadDataUrl(b.logoDataUrl, "logo");
+                if (u) fields.logoUrl = u.secure_url;
             } catch (e) {
                 return res.status(400).json({
                     success: false,
@@ -823,7 +842,6 @@ app.post("/save-client", requireMongo, async (req, res) => {
 
         } else if (typeof b.logoUrl === "string") {
 
-            // Allow plain URL too (for backward compatibility or if user pastes one)
             fields.logoUrl = b.logoUrl.trim();
         }
 
@@ -832,8 +850,8 @@ app.post("/save-client", requireMongo, async (req, res) => {
         if (b.footerDataUrl) {
 
             try {
-                const url = await uploadDataUrl(b.footerDataUrl, "footer");
-                if (url) fields.footerUrl = url;
+                const u = await uploadDataUrl(b.footerDataUrl, "footer");
+                if (u) fields.footerUrl = u.secure_url;
             } catch (e) {
                 return res.status(400).json({
                     success: false,
@@ -846,8 +864,7 @@ app.post("/save-client", requireMongo, async (req, res) => {
             fields.footerUrl = b.footerUrl.trim();
         }
 
-        /* Sample posts — accepts array of data URLs OR array of plain URLs.
-           Appends to existing samplePosts; use __REMOVE_SAMPLES__ to clear. */
+        /* Sample posts */
 
         if (Array.isArray(b.samplePostsDataUrls) && b.samplePostsDataUrls.length) {
 
@@ -856,11 +873,11 @@ app.post("/save-client", requireMongo, async (req, res) => {
 
             for (let i = 0; i < b.samplePostsDataUrls.length; i++) {
                 try {
-                    const url = await uploadDataUrl(
+                    const u = await uploadDataUrl(
                         b.samplePostsDataUrls[i],
                         "sample-" + i
                     );
-                    if (url) newUrls.push(url);
+                    if (u) newUrls.push(u.secure_url);
                 } catch (e) {
                     console.log(`Sample ${i} upload failed: ${e.message}`);
                 }
@@ -870,14 +887,40 @@ app.post("/save-client", requireMongo, async (req, res) => {
 
         } else if (Array.isArray(b.samplePostsUrls)) {
 
-            // Explicit replacement with a final list (used by Remove buttons)
             fields.samplePosts = b.samplePostsUrls.filter(Boolean);
         }
 
-        /* ---------- Special clears: "REMOVE" sentinel deletes the field ---------- */
+        /* Song (audio file for stories) — also saves the Cloudinary
+           public_id so we can reference it in l_video overlay later. */
+
+        if (b.songDataUrl) {
+
+            try {
+                const u = await uploadDataUrl(b.songDataUrl, "song");
+                if (u) {
+                    fields.songUrl      = u.secure_url;
+                    fields.songPublicId = u.public_id;
+                }
+            } catch (e) {
+                return res.status(400).json({
+                    success: false,
+                    error:   "Song upload failed: " + e.message
+                });
+            }
+
+        } else if (typeof b.songUrl === "string") {
+
+            fields.songUrl = b.songUrl.trim();
+        }
+
+        /* Special clears */
 
         if (b.logoUrl === "__REMOVE__")    fields.logoUrl   = "";
         if (b.footerUrl === "__REMOVE__")  fields.footerUrl = "";
+        if (b.songUrl === "__REMOVE__") {
+            fields.songUrl      = "";
+            fields.songPublicId = "";
+        }
         if (b.samplePosts === "__REMOVE_SAMPLES__") fields.samplePosts = [];
 
         /* ---------- Upsert ---------- */
