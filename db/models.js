@@ -165,6 +165,31 @@ const IgQueueSchema = new Schema({
     createdAt:   { type: Date, default: Date.now }
 });
 
+/* ---------- FACEBOOK PUBLISH QUEUE ---------- */
+/* Mirror of IgQueue. Holds FB posts in a server-side queue
+   so we control the publish timing precisely (instead of relying
+   on Meta's scheduled_publish_time which has quirks). */
+
+const FbQueueSchema = new Schema({
+    jobId:       { type: String, required: true, unique: true, index: true },
+    client:      { type: String, index: true },
+    postId:      Number,
+    pageName:    String,                // FB Page name
+    accountName: String,
+    pageId:      String,                // FB Page ID — POST target
+    pageToken:   String,                // page access token
+    caption:     String,
+    hashtags:    String,
+    mediaUrl:    String,                // Cloudinary URL — fetched at fire time
+    mediaType:   { type: String, default: "image" },
+    scheduledAt: { type: Date, required: true, index: true },
+    status:      { type: String, default: "pending", index: true },
+    metaPostId:  String,
+    error:       String,
+    attempts:    { type: Number, default: 0 },
+    createdAt:   { type: Date, default: Date.now }
+});
+
 module.exports = {
     Client:    mongoose.model("Client",    ClientSchema),
     Prompt:    mongoose.model("Prompt",    PromptSchema),
@@ -175,5 +200,6 @@ module.exports = {
     MetaPage:  mongoose.model("MetaPage",  MetaPageSchema),
     RunLog:    mongoose.model("RunLog",    RunLogSchema),
     Log:       mongoose.model("Log",       LogSchema),
-    IgQueue:   mongoose.model("IgQueue",   IgQueueSchema)
+    IgQueue:   mongoose.model("IgQueue",   IgQueueSchema),
+    FbQueue:   mongoose.model("FbQueue",   FbQueueSchema)
 };

@@ -326,17 +326,16 @@ content="width=device-width, initial-scale=1.0"
     </div>
 
     <!-- =========================
-         INSTAGRAM PUBLISH QUEUE
+         PUBLISH QUEUES (FB + IG)
     ========================== -->
 
     <div class="section">
 
         <h2 style="display:flex; justify-content:space-between; align-items:center;">
-            <span>📸 Instagram Publish Queue</span>
+            <span>📅 Publish Queue</span>
             <span style="font-size:13px; color:#888; font-weight:normal;">
-                <span id="igQueueCount">0</span> queued
-                <button onclick="refreshIgQueue()"
-                    style="margin-left:8px; font-size:12px; padding:5px 11px;
+                <button onclick="refreshAllQueues()"
+                    style="font-size:12px; padding:5px 11px;
                            background:#1d2435; border:1px solid #2c3a52;
                            color:#aac; border-radius:5px; cursor:pointer;">
                     ↺ Refresh
@@ -345,11 +344,31 @@ content="width=device-width, initial-scale=1.0"
         </h2>
 
         <p class="subtext" style="margin-bottom:10px;">
-            Posts to Instagram are queued on the server until their scheduled time, then published via the Graph API.
+            Posts are held by the server until their scheduled time, then published via the Meta Graph API.
             Click 🗑 to cancel a queued post.
         </p>
 
-        <div id="igQueueList"></div>
+        <!-- Tabs -->
+        <div style="display:flex; gap:6px; margin-bottom:12px; border-bottom:1px solid #2a2a2a; padding-bottom:0;">
+            <button id="qTab_fb"
+                onclick="switchQueueTab('fb')"
+                style="background:#0f1a2e; border:1px solid #1d3654; border-bottom:none;
+                       color:#7eaaff; padding:8px 16px; border-radius:6px 6px 0 0;
+                       cursor:pointer; font-weight:600; font-size:13px;
+                       position:relative; top:1px;">
+                📘 Facebook (<span id="fbQueueCount">0</span>)
+            </button>
+            <button id="qTab_ig"
+                onclick="switchQueueTab('ig')"
+                style="background:#161616; border:1px solid #2a2a2a; border-bottom:1px solid #2a2a2a;
+                       color:#888; padding:8px 16px; border-radius:6px 6px 0 0;
+                       cursor:pointer; font-weight:600; font-size:13px;">
+                📸 Instagram (<span id="igQueueCount">0</span>)
+            </button>
+        </div>
+
+        <div id="fbQueueList"></div>
+        <div id="igQueueList" style="display:none;"></div>
 
     </div>
 
@@ -548,7 +567,24 @@ content="width=device-width, initial-scale=1.0"
 
     <div class="section">
 
-        <h2>Generated Posts</h2>
+        <h2 style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <span>Generated Posts</span>
+            <span style="font-size:13px; color:#888; font-weight:normal;">
+                Showing for client: <strong id="postsClientLabel" style="color:#aac;">— pick a client above —</strong>
+                <button onclick="loadPosts()"
+                    style="margin-left:8px; font-size:12px; padding:5px 11px;
+                           background:#1d2435; border:1px solid #2c3a52;
+                           color:#aac; border-radius:5px; cursor:pointer;">
+                    ↺ Refresh
+                </button>
+            </span>
+        </h2>
+
+        <p class="subtext" style="margin-bottom:10px;">
+            Pick a client in the <strong>Content Calendar</strong> section above to filter posts.
+            Generated posts that have not yet been scheduled to publish appear here.
+        </p>
+
         <div id="posts"></div>
 
     </div>

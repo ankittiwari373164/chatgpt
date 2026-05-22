@@ -74,8 +74,14 @@ async function loadClients() {
 
         window.clientsData = clients;
 
-        select.onchange = loadSavedCalendar;
-        if (clients.length) loadSavedCalendar();
+        select.onchange = () => {
+            loadSavedCalendar();
+            loadPosts();
+        };
+        if (clients.length) {
+            loadSavedCalendar();
+            loadPosts();
+        }
 
         renderClientsList(clients);
 
@@ -651,24 +657,31 @@ function removePendingSample(i) {
    INSTAGRAM PUBLISH QUEUE
 ============================================================ */
 
-async function refreshIgQueue() {
+async function refreshQueue(platform) {
+
+    const endpoint  = platform === "fb" ? "/fb-queue" : "/ig-queue";
+    const listId    = platform === "fb" ? "fbQueueList"  : "igQueueList";
+    const countId   = platform === "fb" ? "fbQueueCount" : "igQueueCount";
+    const platformName = platform === "fb" ? "Facebook" : "Instagram";
 
     try {
 
-        const r = await fetch("/ig-queue");
+        const r = await fetch(endpoint);
         const d = await r.json();
 
-        const list = document.getElementById("igQueueList");
-        const countEl = document.getElementById("igQueueCount");
+        const list = document.getElementById(listId);
+        const countEl = document.getElementById(countId);
 
         const items = d.items || [];
         if (countEl) countEl.textContent = items.length;
+
+        if (!list) return;
 
         if (!items.length) {
             list.innerHTML = `
                 <div style="background:#161616; border:1px dashed #2a2a2a; border-radius:8px;
                             padding:24px; text-align:center; color:#666;">
-                    No Instagram posts queued.
+                    No ${platformName} posts queued.
                     <div style="font-size:11px; color:#444; margin-top:4px;">
                         Posts appear here while waiting to publish.
                     </div>
@@ -689,6 +702,7 @@ async function refreshIgQueue() {
               : status === "pending"    ? "#ffd97e"
               : status === "done"       ? "#7eff7e"
               : status === "failed"     ? "#ff7e7e"
+              : status === "canceled"   ? "#888"
               :                            "#888";
 
             const countdownText =
@@ -707,7 +721,12 @@ async function refreshIgQueue() {
                         object-fit:cover; border-radius:6px; border:1px solid #2a2a2a; flex-shrink:0;">`
                     : ''}
                 <div style="flex:1; min-width:0;">
-                    <div style="font-weight:600; font-size:13px;">${escapeHTML(job.accountName || job.client || "?")}</div>
+                    <div style="font-weight:600; font-size:13px;">
+                        ${escapeHTML(job.accountName || job.pageName || job.client || "?")}
+                        <span style="font-size:10px; color:#666; font-weight:normal; margin-left:6px;">
+                            ${job.client && job.client !== job.accountName ? '· ' + escapeHTML(job.client) : ''}
+                        </span>
+                    </div>
                     <div style="font-size:11px; color:#888; margin-top:2px; overflow:hidden;
                                 text-overflow:ellipsis; white-space:nowrap; max-width:420px;">
                         ${escapeHTML(String(job.caption || "").slice(0, 80))}
@@ -725,7 +744,7 @@ async function refreshIgQueue() {
                 </div>
                 ${(status === "pending" || status === "processing")
                     ? `<button
-                        onclick="cancelIgJob('${job.jobId}')"
+                        onclick="cancelQueueJob('${platform}', '${job.jobId}')"
                         style="background:#3a1010; border:1px solid #5a2020;
                                color:#ffaaaa; padding:7px 12px; border-radius:6px;
                                cursor:pointer; font-size:12px; flex-shrink:0;">
@@ -737,23 +756,27 @@ async function refreshIgQueue() {
 
     } catch (e) {
 
-        const list = document.getElementById("igQueueList");
+        const list = document.getElementById(listId);
         if (list) list.innerHTML = `<div style="color:#ff7e7e; padding:10px;">Failed to load: ${escapeHTML(e.message)}</div>`;
     }
 }
 
-async function cancelIgJob(jobId) {
+async function cancelQueueJob(platform, jobId) {
 
-    if (!confirm("Cancel this Instagram post? It will not be published.")) return;
+    const platformName = platform === "fb" ? "Facebook" : "Instagram";
+
+    if (!confirm(`Cancel this ${platformName} post? It will not be published.`)) return;
+
+    const endpoint = platform === "fb" ? "/fb-queue/" : "/ig-queue/";
 
     try {
 
-        const r = await fetch("/ig-queue/" + encodeURIComponent(jobId), { method: "DELETE" });
+        const r = await fetch(endpoint + encodeURIComponent(jobId), { method: "DELETE" });
         const d = await r.json();
 
         if (d.success) {
-            addAutomationLog(`✓ Canceled Instagram post ${jobId}`, "ok");
-            refreshIgQueue();
+            addAutomationLog(`✓ Canceled ${platformName} post ${jobId}`, "ok");
+            refreshQueue(platform);
         } else {
             addAutomationLog(`❌ Cancel failed: ${d.error || "unknown"}`, "err");
         }
@@ -763,8 +786,61 @@ async function cancelIgJob(jobId) {
     }
 }
 
-// Auto-refresh the IG queue every 30 sec
+// Backwards-compat wrappers
+function refreshIgQueue() { return refreshQueue("ig"); }
+function refreshFbQueue() { return refreshQueue("fb"); }
+function refreshAllQueues() {
+    refreshFbQueue();
+    refreshIgQueue();
+}
+
+let __activeQueueTab = "fb";
+
+function switchQueueTab(tab) {
+
+    __activeQueueTab = tab;
+
+    const fbList = document.getElementById("fbQueueList");
+    const igList = document.getElementById("igQueueList");
+    const fbTab = document.getElementById("qTab_fb");
+    const igTab = document.getElementById("qTab_ig");
+
+    if (tab === "fb") {
+        if (fbList) fbList.style.display = "block";
+        if (igList) igList.style.display = "none";
+        if (fbTab) {
+            fbTab.style.background = "#0f1a2e";
+            fbTab.style.borderColor = "#1d3654";
+            fbTab.style.color = "#7eaaff";
+            fbTab.style.borderBottom = "none";
+        }
+        if (igTab) {
+            igTab.style.background = "#161616";
+            igTab.style.borderColor = "#2a2a2a";
+            igTab.style.color = "#888";
+            igTab.style.borderBottom = "1px solid #2a2a2a";
+        }
+    } else {
+        if (fbList) fbList.style.display = "none";
+        if (igList) igList.style.display = "block";
+        if (igTab) {
+            igTab.style.background = "#2e0f1a";
+            igTab.style.borderColor = "#541d36";
+            igTab.style.color = "#ff7eaa";
+            igTab.style.borderBottom = "none";
+        }
+        if (fbTab) {
+            fbTab.style.background = "#161616";
+            fbTab.style.borderColor = "#2a2a2a";
+            fbTab.style.color = "#888";
+            fbTab.style.borderBottom = "1px solid #2a2a2a";
+        }
+    }
+}
+
+// Auto-refresh BOTH queues every 30 sec
 setInterval(() => {
+    if (document.getElementById("fbQueueList")) refreshFbQueue();
     if (document.getElementById("igQueueList")) refreshIgQueue();
 }, 30000);
 
@@ -1880,6 +1956,32 @@ function connectSSE() {
         } catch (_) {}
     });
 
+    /* ===== FB queue events ===== */
+
+    es.addEventListener("fb-published", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`✅ Facebook published — ${d.client} (${d.metaPostId})`, "ok");
+            refreshFbQueue();
+        } catch (_) {}
+    });
+
+    es.addEventListener("fb-failed", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`❌ Facebook publish failed — ${d.client}: ${d.error}`, "err");
+            refreshFbQueue();
+        } catch (_) {}
+    });
+
+    es.addEventListener("fb-canceled", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`✓ Facebook post canceled — ${d.client}`, "info");
+            refreshFbQueue();
+        } catch (_) {}
+    });
+
     es.addEventListener("pipeline-done", evt => {
 
         try {
@@ -1934,11 +2036,42 @@ async function loadPosts() {
 
     try {
 
-        const response = await fetch("/posts");
-        const posts    = await response.json();
+        const selectedClient =
+            document.getElementById("clients")?.value?.trim() || "";
+
+        const label = document.getElementById("postsClientLabel");
+        if (label) {
+            label.textContent = selectedClient || "— pick a client above —";
+        }
 
         const box = document.getElementById("posts");
         if (!box) return;
+
+        if (!selectedClient) {
+            box.innerHTML = `
+                <div style="background:#161616; border:1px dashed #2a2a2a; border-radius:8px;
+                            padding:24px; text-align:center; color:#666;">
+                    Select a client in the Content Calendar section above to see their generated posts.
+                </div>`;
+            return;
+        }
+
+        const response = await fetch(
+            "/posts?client=" + encodeURIComponent(selectedClient)
+        );
+        const posts    = await response.json();
+
+        if (!Array.isArray(posts) || !posts.length) {
+            box.innerHTML = `
+                <div style="background:#161616; border:1px dashed #2a2a2a; border-radius:8px;
+                            padding:24px; text-align:center; color:#666;">
+                    No generated posts yet for <strong>${escapeHTML(selectedClient)}</strong>.
+                    <div style="font-size:11px; color:#444; margin-top:4px;">
+                        Trigger a generation and they'll appear here.
+                    </div>
+                </div>`;
+            return;
+        }
 
         box.innerHTML = `<div class="grid"></div>`;
         const grid    = box.querySelector(".grid");
@@ -1949,10 +2082,10 @@ async function loadPosts() {
             card.className = "card";
 
             card.innerHTML = `
-              <img src="${post.image}">
-              <h2>${post.client || "—"}</h2>
-              <p>${post.caption || ""}</p>
-              <p>${post.hashtags || ""}</p>
+              <img src="${escapeHTML(post.image)}">
+              <h2>${escapeHTML(post.client || "—")}</h2>
+              <p>${escapeHTML(post.caption || "")}</p>
+              <p>${escapeHTML(post.hashtags || "")}</p>
               <p class="status-line ${post.status}">${post.status}</p>
               <div class="schedule-box">
                 <input
@@ -2258,7 +2391,7 @@ async function clearLogs() {
     autoSelectTodayCustomDay();
 
     loadPosts();
-    refreshIgQueue();
+    refreshAllQueues();
     setInterval(loadPosts, 8000);
     setInterval(refreshQueuedPrompts, 10000); // refresh queued list every 10s
 

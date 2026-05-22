@@ -1511,7 +1511,12 @@ app.post("/meta/delete-pages", requireMongo, async (req, res) => {
 
 app.get("/posts", requireMongo, async (req, res) => {
 
-    const posts = await Post.find().sort({ createdAt: -1 }).limit(100).lean();
+    const filter = {};
+    if (req.query.client) {
+        filter.client = String(req.query.client).trim();
+    }
+
+    const posts = await Post.find(filter).sort({ createdAt: -1 }).limit(100).lean();
 
     res.json(posts.map(p => ({
         id:           p._legacyId || p._id.toString(),
@@ -1969,6 +1974,59 @@ app.delete("/ig-queue/:jobId", requireMongo, async (req, res) => {
     }
 });
 
+/* ============================================================
+   FACEBOOK PUBLISH QUEUE — list + cancel
+============================================================ */
+
+app.get("/fb-queue", requireMongo, async (req, res) => {
+
+    try {
+
+        const fbQueue = require("./lib/fbQueue");
+
+        const showAll = String(req.query.all || "").toLowerCase() === "true";
+
+        const items = showAll
+            ? await fbQueue.listAll(50)
+            : await fbQueue.listPending();
+
+        // Strip the page token before sending to the client — security
+        const cleaned = items.map(j => {
+            const { pageToken, ...rest } = j;
+            return rest;
+        });
+
+        res.json({ items: cleaned, count: cleaned.length });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete("/fb-queue/:jobId", requireMongo, async (req, res) => {
+
+    try {
+
+        const fbQueue = require("./lib/fbQueue");
+
+        const job = await fbQueue.cancel(req.params.jobId);
+
+        if (!job) return res.status(404).json({ error: "Job not found" });
+
+        console.log(`[fb-queue] User canceled ${req.params.jobId}`);
+
+        broadcast("fb-canceled", {
+            jobId: job.jobId,
+            client: job.client
+        });
+
+        res.json({ success: true, jobId: job.jobId, status: job.status });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get("/calendar/:client", requireMongo, async (req, res) => {
 
     try {
@@ -2249,6 +2307,14 @@ app.post("/save", requireMongo, handleSavePost);
             await igQueue.rearm();
         } catch (e) {
             console.log("Could not rearm IG queue:", e.message);
+        }
+
+        // Rearm any pending FB queue jobs from a previous boot
+        try {
+            const fbQueue = require("./lib/fbQueue");
+            await fbQueue.rearm();
+        } catch (e) {
+            console.log("Could not rearm FB queue:", e.message);
         }
 
         // ── Startup health checks (non-blocking) ──
