@@ -668,25 +668,63 @@ function removePendingSample(i) {
 }
 
 /* ============================================================
-   GOOGLE SERVICE ACCOUNT
+   GOOGLE DRIVE — OAuth + Service Account
 ============================================================ */
 
 async function refreshGsaStatus() {
-    const el = document.getElementById("gsaStatus");
-    const clear = document.getElementById("gsaClearBtn");
+    const el        = document.getElementById("gsaStatus");
+    const clearBtn  = document.getElementById("gsaClearBtn");
+    const connBtn   = document.getElementById("oauthConnectBtn");
+    const disconBtn = document.getElementById("oauthDisconnectBtn");
     if (!el) return;
+
     try {
         const r = await fetch("/settings/google-sa");
         const d = await r.json();
-        if (d.configured) {
-            el.innerHTML = `<span style="color:#7eff7e;">✓ ${escapeHTML(d.client_email)}</span>`;
-            if (clear) clear.style.display = "inline-block";
+
+        if (d.configured && d.mode === "oauth") {
+            el.innerHTML = `<span style="color:#7eff7e;">✓ OAuth: ${escapeHTML(d.email || "connected")}</span>`;
+            if (clearBtn)  clearBtn.style.display = "none";
+            if (connBtn) {
+                connBtn.style.display    = "none";
+                connBtn.textContent      = "🔗 Connect Google";
+            }
+            if (disconBtn) disconBtn.style.display = "inline-block";
+
+        } else if (d.configured && d.mode === "service-account") {
+            el.innerHTML = `<span style="color:#ffd97e;">⚠ Service Account: ${escapeHTML(d.client_email)} <span style="color:#888;">(may hit quota errors on personal Gmail)</span></span>`;
+            if (clearBtn)  clearBtn.style.display = "inline-block";
+            if (connBtn) {
+                connBtn.style.display    = "inline-block";
+                connBtn.textContent      = "🔗 Connect Google (recommended)";
+            }
+            if (disconBtn) disconBtn.style.display = "none";
+
         } else {
-            el.innerHTML = `<span style="color:#ffd97e;">⚠ not configured</span>`;
-            if (clear) clear.style.display = "none";
+            el.innerHTML = `<span style="color:#ffd97e;">⚠ not connected</span>`;
+            if (clearBtn)  clearBtn.style.display = "none";
+            if (connBtn) {
+                connBtn.style.display    = "inline-block";
+                connBtn.textContent      = "🔗 Connect Google";
+            }
+            if (disconBtn) disconBtn.style.display = "none";
         }
     } catch (e) {
         el.innerHTML = `<span style="color:#ff7e7e;">err: ${escapeHTML(e.message)}</span>`;
+    }
+}
+
+async function disconnectOAuth() {
+    if (!confirm(
+        "Disconnect Google Drive?\n\n" +
+        "The weekly batch will stop uploading until you reconnect."
+    )) return;
+    try {
+        await fetch("/oauth/google", { method: "DELETE" });
+        addAutomationLog("Google OAuth disconnected", "info");
+        refreshGsaStatus();
+    } catch (e) {
+        alert("Disconnect failed: " + e.message);
     }
 }
 
@@ -725,7 +763,7 @@ async function saveGoogleSa() {
 }
 
 async function clearGoogleSa() {
-    if (!confirm("Remove the saved service account? The weekly batch will stop working.")) return;
+    if (!confirm("Remove the saved service account?")) return;
     await fetch("/settings/google-sa", { method: "DELETE" });
     addAutomationLog("Service account removed", "info");
     refreshGsaStatus();

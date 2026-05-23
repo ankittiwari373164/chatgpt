@@ -1519,20 +1519,14 @@ app.get("/settings/google-sa", requireMongo, async (req, res) => {
     try {
 
         const drive = require("./lib/drive");
+        const info  = await drive.getAuthInfo();
 
-        if (!await drive.isConfigured()) {
-            return res.json({ configured: false });
-        }
-
-        // Don't return the full private key
-        const { Session } = require("./db/models");
-        const doc = await Session.findOne({ name: "google-sa" }).lean();
-        const sa  = doc?.cookies || {};
-
+        // Backward-compat shape for the existing dashboard JS
         res.json({
-            configured:   true,
-            client_email: sa.client_email,
-            project_id:   sa.project_id
+            configured:   info.mode !== "none",
+            mode:         info.mode,                       // "oauth" | "service-account" | "none"
+            client_email: info.email,                       // works for both modes
+            email:        info.email
         });
 
     } catch (err) {
@@ -1550,9 +1544,9 @@ app.post("/settings/google-sa", requireMongo, async (req, res) => {
         }
 
         const drive = require("./lib/drive");
-        const info = await drive.saveServiceAccount(json);
+        await drive.saveServiceAccount(json);
 
-        res.json({ success: true, client_email: info.client_email });
+        res.json({ success: true, client_email: json.client_email });
 
     } catch (err) {
         res.status(400).json({ error: err.message });
@@ -1564,6 +1558,146 @@ app.delete("/settings/google-sa", requireMongo, async (req, res) => {
     try {
         const drive = require("./lib/drive");
         await drive.clearServiceAccount();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   GOOGLE OAUTH — 3 routes:
+
+     GET  /oauth/google/start     → redirects user to Google consent
+     GET  /oauth/google/callback  → Google redirects here with ?code=…
+     DELETE /oauth/google         → disconnects (forgets refresh token)
+============================================================ */
+
+function buildOAuthRedirectUri(req) {
+    // Use HTTPS if the request came in via HTTPS, otherwise HTTP for local dev
+    const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const host  = req.headers["x-forwarded-host"]  || req.headers.host;
+    return `${proto}://${host}/oauth/google/callback`;
+}
+
+app.get("/oauth/google/start", (req, res) => {
+
+    try {
+        const drive       = require("./lib/drive");
+        const redirectUri = buildOAuthRedirectUri(req);
+        const url         = drive.buildAuthUrl(redirectUri);
+
+        console.log("[oauth] starting flow, redirect_uri =", redirectUri);
+
+        res.redirect(url);
+
+    } catch (err) {
+        console.log("[oauth] start error:", err.message);
+        res.status(500).send(`
+            <h2>OAuth setup error</h2>
+            <p>${err.message}</p>
+            <p>Make sure GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are set in env.</p>
+        `);
+    }
+});
+
+app.get("/oauth/google/callback", requireMongo, async (req, res) => {
+
+    try {
+
+        const { code, error } = req.query;
+
+        if (error) {
+            return res.status(400).send(`
+                <h2>OAuth canceled</h2>
+                <p>Google returned: <code>${error}</code></p>
+                <p><a href="/dashboard.html">← back to dashboard</a></p>
+            `);
+        }
+
+        if (!code) {
+            return res.status(400).send(`
+                <h2>Missing ?code in callback</h2>
+                <p><a href="/dashboard.html">← back to dashboard</a></p>
+            `);
+        }
+
+        const drive       = require("./lib/drive");
+        const redirectUri = buildOAuthRedirectUri(req);
+        const tokens      = await drive.exchangeCodeForTokens(code, redirectUri);
+
+        if (!tokens.refresh_token) {
+            return res.status(400).send(`
+                <h2>No refresh_token returned by Google</h2>
+                <p>This usually means you've previously authorized this app. Go to
+                   <a href="https://myaccount.google.com/permissions" target="_blank">
+                   myaccount.google.com/permissions</a>, remove the app, then try again.</p>
+                <p><a href="/dashboard.html">← back to dashboard</a></p>
+            `);
+        }
+
+        // Get the user's email so we can show it in the dashboard
+        let email = "(unknown)";
+        try {
+            const userInfo = await axios.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                {
+                    headers: { Authorization: "Bearer " + tokens.access_token },
+                    timeout: 15_000
+                }
+            );
+            email = userInfo.data?.email || email;
+        } catch (e) {
+            console.log("[oauth] could not fetch user email:", e.message);
+        }
+
+        await drive.saveOAuthCreds({
+            refresh_token: tokens.refresh_token,
+            scope:         tokens.scope,
+            email:         email,
+            connected_at:  new Date().toISOString()
+        });
+
+        console.log(`[oauth] connected ${email}`);
+
+        broadcast("log", {
+            level:   "ok",
+            message: `Google Drive OAuth connected: ${email}`,
+            at:      new Date().toISOString()
+        });
+
+        res.send(`
+            <html>
+            <head><title>Connected</title></head>
+            <body style="font-family: system-ui; padding: 40px; max-width: 600px;
+                         background: #0a0a0a; color: #eee;">
+                <h2 style="color: #7eff7e;">✅ Google Drive connected</h2>
+                <p>Signed in as <strong>${email}</strong></p>
+                <p>All Drive uploads will now go to your account using your storage quota.</p>
+                <p style="margin-top: 30px;">
+                    <a href="/dashboard.html" style="color: #7eaaff; text-decoration: none;
+                       padding: 10px 20px; background: #1d2435; border: 1px solid #2c3a52;
+                       border-radius: 6px;">← Back to dashboard</a>
+                </p>
+            </body>
+            </html>
+        `);
+
+    } catch (err) {
+        const detail = err.response?.data || err.message;
+        console.log("[oauth] callback error:", detail);
+        res.status(500).send(`
+            <h2>OAuth callback error</h2>
+            <pre>${JSON.stringify(detail, null, 2)}</pre>
+            <p><a href="/dashboard.html">← back to dashboard</a></p>
+        `);
+    }
+});
+
+app.delete("/oauth/google", requireMongo, async (req, res) => {
+
+    try {
+        const drive = require("./lib/drive");
+        await drive.clearOAuthCreds();
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
