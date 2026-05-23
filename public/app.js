@@ -801,6 +801,47 @@ async function regenerateAsset(assetId, topic) {
     }
 }
 
+/* Clear all queued + failed DriveAssets and their pending Prompts
+   for the selected client. Drive files already uploaded are kept. */
+
+async function clearWeekForClient() {
+
+    const name = document.getElementById("clients")?.value?.trim();
+    if (!name) return alert("Pick a client first");
+
+    if (!confirm(
+        `Clear queued + failed batch for "${name}"?\n\n` +
+        `This will remove:\n` +
+        `  • All Tampermonkey prompts waiting for this client\n` +
+        `  • All Drive-asset records with status "queued" or "failed"\n\n` +
+        `Drive files already uploaded (in-drive) are KEPT.\n` +
+        `You can then click ▶ Generate Week to start fresh.`
+    )) return;
+
+    addAutomationLog(`🗑 Clearing queue for "${name}"…`, "info");
+
+    try {
+        const r = await fetch("/weekly-gen/" + encodeURIComponent(name), {
+            method: "DELETE"
+        });
+        const d = await r.json();
+
+        if (r.ok && d.success) {
+            addAutomationLog(
+                `✓ Cleared — ${d.promptsDeleted} prompt(s), ${d.assetsDeleted} asset(s) removed`,
+                "ok"
+            );
+            refreshDriveAssets();
+            refreshQueuedPrompts();
+        } else {
+            addAutomationLog(`❌ Clear failed: ${d.error || "unknown"}`, "err");
+            alert("Failed: " + (d.error || "unknown"));
+        }
+    } catch (e) {
+        addAutomationLog(`❌ Clear failed: ${e.message}`, "err");
+    }
+}
+
 async function openDriveFolder() {
     const name = document.getElementById("clients")?.value?.trim();
     if (!name) return alert("Pick a client first");
@@ -1400,6 +1441,18 @@ function connectSSE() {
             const d = JSON.parse(evt.data);
             addAutomationLog(`🔄 Regenerate queued for asset ${d.assetId}`, "info");
             refreshDriveAssets();
+        } catch (_) {}
+    });
+
+    es.addEventListener("weekly-cleared", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(
+                `🗑 Queue cleared for ${d.client} — ${d.promptsDeleted} prompt(s), ${d.assetsDeleted} asset(s)`,
+                "info"
+            );
+            refreshDriveAssets();
+            refreshQueuedPrompts();
         } catch (_) {}
     });
 

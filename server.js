@@ -1617,6 +1617,76 @@ app.post("/regenerate-asset/:assetId", requireMongo, async (req, res) => {
     }
 });
 
+/* DELETE /weekly-gen/:client — clear the queue for one client.
+   Removes:
+     - All ungenerated Prompts for this client (Tampermonkey won't pick up)
+     - All DriveAssets with status "queued" or "failed"
+   Drive files already uploaded ("in-drive" status) are NOT touched.
+*/
+
+app.delete("/weekly-gen/:client", requireMongo, async (req, res) => {
+
+    try {
+
+        const clientName = req.params.client;
+
+        // 1. Find DriveAssets to delete (queued + failed)
+        const assets = await DriveAsset.find({
+            client: clientName,
+            status: { $in: ["queued", "failed"] }
+        }).lean();
+
+        const promptIds = assets.map(a => a.promptId).filter(Boolean);
+
+        // 2. Delete the matching Prompt records (un-generated ones)
+        let promptsDeleted = 0;
+        if (promptIds.length) {
+            const r = await Prompt.deleteMany({
+                _legacyId: { $in: promptIds },
+                generated: false
+            });
+            promptsDeleted = r.deletedCount || 0;
+        }
+
+        // 3. Also catch any orphan prompts from weekly-batch (no matching asset)
+        const r2 = await Prompt.deleteMany({
+            client: clientName,
+            source: { $in: ["weekly-batch", "weekly-batch-regenerate"] },
+            generated: false
+        });
+        promptsDeleted += r2.deletedCount || 0;
+
+        // 4. Delete the DriveAsset records
+        const r3 = await DriveAsset.deleteMany({
+            client: clientName,
+            status: { $in: ["queued", "failed"] }
+        });
+
+        const assetsDeleted = r3.deletedCount || 0;
+
+        console.log(
+            `[clear-week] ${clientName}: removed ${promptsDeleted} prompt(s) ` +
+            `+ ${assetsDeleted} asset(s)`
+        );
+
+        broadcast("weekly-cleared", {
+            client:          clientName,
+            promptsDeleted,
+            assetsDeleted
+        });
+
+        res.json({
+            success:        true,
+            promptsDeleted,
+            assetsDeleted
+        });
+
+    } catch (err) {
+        console.log("/weekly-gen DELETE error:", err.message);
+        res.status(400).json({ error: err.message });
+    }
+});
+
 app.get("/drive-assets/:client", requireMongo, async (req, res) => {
 
     try {
