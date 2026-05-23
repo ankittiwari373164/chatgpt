@@ -133,6 +133,7 @@ content="width=device-width, initial-scale=1.0"
             <input id="phone"    placeholder="Phone (e.g. +91 98765 43210)">
             <input id="email"    placeholder="Email (brand@example.com)">
             <input id="chatLink" placeholder="ChatGPT Chat URL (https://chatgpt.com/c/...)">
+            <input id="driveFolderUrl" placeholder="Google Drive Folder URL (where the weekly batch uploads)">
 
         </div>
 
@@ -322,6 +323,67 @@ content="width=device-width, initial-scale=1.0"
     </div>
 
     <!-- =========================
+         GOOGLE DRIVE SETTINGS
+    ========================== -->
+
+    <div class="section" id="googleSaSection">
+
+        <h2 style="display:flex; justify-content:space-between; align-items:center;">
+            <span>🔑 Google Drive — Service Account</span>
+            <span id="gsaStatus" style="font-size:13px; color:#888; font-weight:normal;">
+                checking…
+            </span>
+        </h2>
+
+        <p class="subtext" style="margin-bottom:10px;">
+            One-time setup. Create a Service Account in Google Cloud Console → download JSON key →
+            share each client's Drive folder with the service account email (Editor access) → paste the JSON below.
+            <br>
+            <strong>Permanent access</strong> — never expires.
+        </p>
+
+        <details style="margin-bottom:10px;">
+            <summary style="cursor:pointer; color:#7eaaff; font-size:12px;">📖 Step-by-step setup</summary>
+            <div style="font-size:12px; color:#aaa; padding:10px; background:#0e0e0e; border-radius:6px; margin-top:6px; line-height:1.7;">
+                1. Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#7eaaff;">Google Cloud Console → Credentials</a><br>
+                2. Click <strong>+ Create Credentials → Service Account</strong> → give any name → Done<br>
+                3. Click the service account → <strong>Keys tab → Add Key → Create new key → JSON</strong> → Download<br>
+                4. Enable the <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" style="color:#7eaaff;">Drive API</a> for the project<br>
+                5. Open each client's Google Drive folder → <strong>Share</strong> with the service account email (in the JSON as <code>client_email</code>) with <strong>Editor</strong> access<br>
+                6. Paste the entire downloaded JSON below → Save
+            </div>
+        </details>
+
+        <textarea id="gsaJson" placeholder='Paste the entire downloaded service account JSON here:
+{
+  "type": "service_account",
+  "project_id": "...",
+  "private_key": "-----BEGIN PRIVATE KEY-----...",
+  "client_email": "yourname@yourproj.iam.gserviceaccount.com",
+  ...
+}'
+            style="width:100%; min-height:140px; padding:10px 12px;
+                   background:#1a1a1a; border:1px solid #333;
+                   border-radius:6px; color:#fff; font-family:monospace;
+                   font-size:11px; line-height:1.4; resize:vertical;"></textarea>
+
+        <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+            <button onclick="saveGoogleSa()"
+                style="padding:9px 16px; background:#0e3a1f; border:1px solid #1a6437;
+                       color:#a4f0bd; border-radius:6px; cursor:pointer;
+                       font-weight:600; font-size:13px;">
+                💾 Save Service Account
+            </button>
+            <button onclick="clearGoogleSa()" id="gsaClearBtn"
+                style="display:none; padding:9px 16px; background:#3a1010; border:1px solid #5a2020;
+                       color:#ffaaaa; border-radius:6px; cursor:pointer; font-size:13px;">
+                🗑 Remove
+            </button>
+        </div>
+
+    </div>
+
+    <!-- =========================
          CALENDAR
     ========================== -->
 
@@ -363,6 +425,58 @@ content="width=device-width, initial-scale=1.0"
         </p>
 
         <div id="calendar"></div>
+
+    </div>
+
+    <!-- =========================
+         WEEKLY BATCH
+    ========================== -->
+
+    <div class="section">
+
+        <h2 style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <span>📦 Weekly Batch</span>
+            <span style="font-size:13px; color:#888; font-weight:normal;">
+                Client: <strong id="weeklyClientLabel" style="color:#aac;">— pick a client above —</strong>
+                <button onclick="refreshDriveAssets()"
+                    style="margin-left:8px; font-size:12px; padding:5px 11px;
+                           background:#1d2435; border:1px solid #2c3a52;
+                           color:#aac; border-radius:5px; cursor:pointer;">
+                    ↺ Refresh
+                </button>
+            </span>
+        </h2>
+
+        <p class="subtext" style="margin-bottom:10px;">
+            <strong>Step 1:</strong> click <em>Generate Week</em> to build the next 7 posting days for the selected client.
+            Tampermonkey creates the images and uploads them to the client's Drive folder.
+            <br>
+            <strong>Step 2:</strong> review the Drive folder — delete bad files, drop in replacements
+            (the filename becomes the post topic).
+            <br>
+            <strong>Step 3:</strong> click <em>Approve & Schedule</em> — the server reads the live
+            Drive state and pushes everything to the FB + Instagram queues.
+        </p>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+            <button onclick="generateWeekForClient()" class="main-btn">
+                ▶ Generate Week
+            </button>
+            <button onclick="approveWeekForClient()"
+                style="padding:9px 16px; background:#0e3a1f; border:1px solid #1a6437;
+                       color:#a4f0bd; border-radius:6px; cursor:pointer;
+                       font-weight:600; font-size:14px;">
+                ✓ Approve & Schedule
+            </button>
+            <button onclick="openDriveFolder()"
+                style="padding:9px 16px; background:#1d2435; border:1px solid #2c3a52;
+                       color:#aac; border-radius:6px; cursor:pointer;
+                       font-weight:600; font-size:14px;">
+                📁 Open Drive Folder
+            </button>
+        </div>
+
+        <div id="driveAssetsList"></div>
 
     </div>
 

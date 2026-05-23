@@ -77,10 +77,12 @@ async function loadClients() {
         select.onchange = () => {
             loadSavedCalendar();
             loadPosts();
+            refreshDriveAssets();
         };
         if (clients.length) {
             loadSavedCalendar();
             loadPosts();
+            refreshDriveAssets();
         }
 
         renderClientsList(clients);
@@ -144,6 +146,7 @@ function renderClientsList(clients) {
                     ${sampleCount ? `<span style="color:#ffd97e;">· ${sampleCount} sample${sampleCount > 1 ? "s" : ""}</span>` : ''}
                     ${c.contactInCaption === false ? `<span style="color:#f88;">· 🚫 no contact in caption</span>` : ''}
                     ${c.storyEnabled ? `<span style="color:#ff97e7;">· 📱 story${c.songUrl ? " 🎵" : ""}</span>` : ''}
+                    ${c.driveFolderUrl ? `<span style="color:#7eaaff;">· 📁 <a href="${escapeHTML(c.driveFolderUrl)}" target="_blank" style="color:#7eaaff;">drive</a></span>` : '<span style="color:#f88;">· ⚠ no Drive folder</span>'}
                     ${c.chatLink ? `<span style="color:#888;">· <a href="${escapeHTML(c.chatLink)}" target="_blank" style="color:#7eaaff;">chat</a></span>` : ''}
                     ${c.website ? `<span style="color:#666;">· <a href="${escapeHTML(c.website)}" target="_blank" style="color:#7eaaff;">site</a></span>` : ''}
                 </div>
@@ -353,6 +356,7 @@ async function saveClient() {
         email:       $("email")?.value.trim()       || "",
         description: $("description")?.value.trim() || "",
         chatLink:    $("chatLink")?.value.trim()    || "",
+        driveFolderUrl: $("driveFolderUrl")?.value.trim() || "",
         postSize:    getRadio("postSize") || "1:1",
         postDays:    getRadio("postDays") || "mwf",
         contactInCaption: !!$("contactInCaption")?.checked,
@@ -452,6 +456,7 @@ async function editClient(encodedName) {
         set("email",       c.email);
         set("description", c.description);
         set("chatLink",    c.chatLink);
+        set("driveFolderUrl", c.driveFolderUrl);
 
         const cic = document.getElementById("contactInCaption");
         const sen = document.getElementById("storyEnabled");
@@ -517,7 +522,7 @@ async function editClient(encodedName) {
 
 function cancelEdit() {
 
-    ["name","industry","tone","audience","services","style","cta","website","phone","email","description","chatLink"]
+    ["name","industry","tone","audience","services","style","cta","website","phone","email","description","chatLink","driveFolderUrl"]
         .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
 
     const nameEl = document.getElementById("name");
@@ -776,6 +781,261 @@ function removeSong() {
 /* ============================================================
    INSTAGRAM PUBLISH QUEUE
 ============================================================ */
+
+/* ============================================================
+   GOOGLE SERVICE ACCOUNT
+============================================================ */
+
+async function refreshGsaStatus() {
+    const el = document.getElementById("gsaStatus");
+    const clear = document.getElementById("gsaClearBtn");
+    if (!el) return;
+    try {
+        const r = await fetch("/settings/google-sa");
+        const d = await r.json();
+        if (d.configured) {
+            el.innerHTML = `<span style="color:#7eff7e;">✓ ${escapeHTML(d.client_email)}</span>`;
+            if (clear) clear.style.display = "inline-block";
+        } else {
+            el.innerHTML = `<span style="color:#ffd97e;">⚠ not configured</span>`;
+            if (clear) clear.style.display = "none";
+        }
+    } catch (e) {
+        el.innerHTML = `<span style="color:#ff7e7e;">err: ${escapeHTML(e.message)}</span>`;
+    }
+}
+
+async function saveGoogleSa() {
+    const raw = document.getElementById("gsaJson")?.value?.trim();
+    if (!raw) return alert("Paste the service account JSON first");
+    let parsed;
+    try { parsed = JSON.parse(raw); }
+    catch (e) { return alert("Invalid JSON: " + e.message); }
+
+    if (parsed.type !== "service_account") {
+        return alert("This doesn't look like a Service Account JSON. Make sure you downloaded the SA key, not OAuth credentials.");
+    }
+    if (!parsed.client_email || !parsed.private_key) {
+        return alert("Missing client_email or private_key. Re-download the key.");
+    }
+
+    try {
+        const r = await fetch("/settings/google-sa", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ json: parsed })
+        });
+        const d = await r.json();
+        if (d.success) {
+            addAutomationLog(`✓ Service account saved: ${d.client_email}`, "ok");
+            alert("Saved. Now share each client's Drive folder with this email:\n\n" + d.client_email);
+            document.getElementById("gsaJson").value = "";
+            refreshGsaStatus();
+        } else {
+            alert("Save failed: " + (d.error || "unknown"));
+        }
+    } catch (e) {
+        alert("Save failed: " + e.message);
+    }
+}
+
+async function clearGoogleSa() {
+    if (!confirm("Remove the saved service account? The weekly batch will stop working.")) return;
+    await fetch("/settings/google-sa", { method: "DELETE" });
+    addAutomationLog("Service account removed", "info");
+    refreshGsaStatus();
+}
+
+/* ============================================================
+   WEEKLY BATCH
+============================================================ */
+
+async function generateWeekForClient() {
+    const name = document.getElementById("clients")?.value?.trim();
+    if (!name) return alert("Pick a client first");
+
+    if (!confirm(
+        `Generate next week's posts for "${name}"?\n\n` +
+        `This will queue prompts for Tampermonkey to process.\n` +
+        `Make sure Tampermonkey is running on the right ChatGPT tab.`
+    )) return;
+
+    addAutomationLog(`📦 Starting weekly batch for "${name}"…`, "info");
+
+    try {
+        const r = await fetch("/weekly-gen/" + encodeURIComponent(name), { method: "POST" });
+        const d = await r.json();
+        if (r.ok && d.success) {
+            const queued = (d.queued || []).filter(q => q.status === "queued").length;
+            const already = (d.queued || []).filter(q => q.status === "already-queued").length;
+            addAutomationLog(
+                `✓ Weekly batch: ${queued} new prompt(s) queued, ${already} already queued`,
+                "ok"
+            );
+            refreshDriveAssets();
+            refreshQueuedPrompts();
+        } else {
+            addAutomationLog(`❌ Weekly batch failed: ${d.error || "unknown"}`, "err");
+            alert("Failed: " + (d.error || "unknown"));
+        }
+    } catch (e) {
+        addAutomationLog(`❌ Weekly batch failed: ${e.message}`, "err");
+    }
+}
+
+async function approveWeekForClient() {
+    const name = document.getElementById("clients")?.value?.trim();
+    if (!name) return alert("Pick a client first");
+
+    if (!confirm(
+        `Approve and schedule "${name}"?\n\n` +
+        `The server will read the live Drive folder and schedule everything ` +
+        `that's in it to FB + Instagram for the next 7 posting days.`
+    )) return;
+
+    addAutomationLog(`✓ Approving "${name}"…`, "info");
+
+    try {
+        const r = await fetch("/approve-week/" + encodeURIComponent(name), { method: "POST" });
+        const d = await r.json();
+        if (r.ok && d.success) {
+            addAutomationLog(
+                `✓ "${name}" approved — ${d.scheduled} scheduled` +
+                (d.items?.filter(i=>i.status==="failed").length ? ` (${d.items.filter(i=>i.status==="failed").length} failed)` : ""),
+                "ok"
+            );
+            refreshDriveAssets();
+            refreshAllQueues();
+        } else {
+            addAutomationLog(`❌ Approve failed: ${d.error || "unknown"}`, "err");
+            alert("Failed: " + (d.error || "unknown"));
+        }
+    } catch (e) {
+        addAutomationLog(`❌ Approve failed: ${e.message}`, "err");
+    }
+}
+
+async function openDriveFolder() {
+    const name = document.getElementById("clients")?.value?.trim();
+    if (!name) return alert("Pick a client first");
+    const r = await fetch("/clients/" + encodeURIComponent(name));
+    const c = await r.json();
+    if (c.driveFolderUrl) {
+        window.open(c.driveFolderUrl, "_blank");
+    } else {
+        alert("This client has no Drive folder URL set. Edit the client to add one.");
+    }
+}
+
+async function refreshDriveAssets() {
+
+    const name = document.getElementById("clients")?.value?.trim() || "";
+    const lbl = document.getElementById("weeklyClientLabel");
+    if (lbl) lbl.textContent = name || "— pick a client above —";
+
+    const list = document.getElementById("driveAssetsList");
+    if (!list) return;
+
+    if (!name) {
+        list.innerHTML = `
+            <div style="background:#161616; border:1px dashed #2a2a2a; border-radius:8px;
+                        padding:18px; text-align:center; color:#666;">
+                Select a client above to see their weekly batch assets.
+            </div>`;
+        return;
+    }
+
+    try {
+
+        // Fetch both DB assets AND live Drive folder in parallel
+        const [assetsRes, driveRes] = await Promise.all([
+            fetch("/drive-assets/" + encodeURIComponent(name)),
+            fetch("/drive-folder/" + encodeURIComponent(name))
+        ]);
+
+        const assets    = (await assetsRes.json()).items || [];
+        const driveData = await driveRes.json();
+        const driveFiles = driveData.files || [];
+
+        // Build a "live" view: each Drive file + match to asset by filename
+        const assetByFileName = new Map();
+        assets.forEach(a => assetByFileName.set(a.fileName, a));
+
+        let html = `<div style="margin-bottom:8px; font-size:12px; color:#888;">
+            Drive: ${driveFiles.length} file(s) · DB tracking: ${assets.length} asset(s)
+        </div>`;
+
+        // Show queued-but-not-yet-in-Drive assets first (still processing)
+        const inProgress = assets.filter(a =>
+            ["queued", "generating", "failed"].includes(a.status) &&
+            !driveFiles.find(f => f.name === a.fileName)
+        );
+
+        if (inProgress.length) {
+            html += `<div style="margin-bottom:10px;">
+                <div style="font-size:12px; color:#ffd97e; margin-bottom:6px;">⏳ Generating:</div>`;
+            inProgress.forEach(a => {
+                const statusColor =
+                    a.status === "generating" ? "#ffd97e"
+                  : a.status === "failed"     ? "#ff7e7e"
+                  : "#888";
+                html += `
+                <div style="background:#161616; border:1px solid #2a2a2a; border-radius:6px;
+                            padding:8px 12px; margin-bottom:4px; display:flex; gap:10px;
+                            align-items:center; font-size:12px;">
+                    <span style="color:${statusColor};">● ${a.status}</span>
+                    <span style="flex:1;">${escapeHTML(a.fileName || "?")}</span>
+                    <span style="color:#666;">${escapeHTML(a.calendarDate || "")}</span>
+                    ${a.error ? `<span style="color:#ff7e7e; font-size:10px;">${escapeHTML(a.error.slice(0, 60))}</span>` : ""}
+                </div>`;
+            });
+            html += "</div>";
+        }
+
+        // Show files currently in Drive
+        if (driveFiles.length) {
+            html += `<div style="font-size:12px; color:#7eff7e; margin-bottom:6px;">📁 In Drive (live):</div>`;
+            driveFiles.forEach(f => {
+                const asset = assetByFileName.get(f.name);
+                const status = asset?.status || "in-drive";
+                const isScheduled = status === "scheduled" || status === "published";
+                const statusColor =
+                    status === "scheduled" ? "#7eaaff"
+                  : status === "published" ? "#7eff7e"
+                  : "#888";
+
+                html += `
+                <div style="background:#161616; border:1px solid #2a2a2a; border-radius:6px;
+                            padding:10px 12px; margin-bottom:4px; display:flex; gap:10px;
+                            align-items:center; font-size:12px;">
+                    <span style="color:${statusColor};">●</span>
+                    <a href="${escapeHTML(f.webViewLink || "#")}" target="_blank"
+                       style="flex:1; color:#aac; text-decoration:none; overflow:hidden;
+                              text-overflow:ellipsis; white-space:nowrap;">
+                        ${escapeHTML(f.name)}
+                    </a>
+                    <span style="color:#666; font-size:11px;">${escapeHTML(status)}</span>
+                    ${asset?.calendarDate
+                        ? `<span style="color:#666; font-size:11px;">→ ${escapeHTML(asset.calendarDate)}</span>`
+                        : ""}
+                </div>`;
+            });
+        } else if (!inProgress.length) {
+            html += `
+            <div style="background:#161616; border:1px dashed #2a2a2a; border-radius:8px;
+                        padding:18px; text-align:center; color:#666; font-size:12px;">
+                Drive folder is empty. Click <strong>▶ Generate Week</strong> to make a fresh batch.
+            </div>`;
+        }
+
+        list.innerHTML = html;
+
+    } catch (e) {
+        list.innerHTML = `<div style="color:#ff7e7e; padding:8px; font-size:12px;">
+            ${escapeHTML(e.message)}
+        </div>`;
+    }
+}
 
 async function refreshQueue(platform) {
 
@@ -2081,6 +2341,35 @@ function connectSSE() {
         } catch (_) {}
     });
 
+    /* ===== Weekly batch events ===== */
+
+    es.addEventListener("weekly-uploaded", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            if (d.status === "in-drive") {
+                addAutomationLog(`📁 Drive: "${d.topic}" → ${d.client}`, "ok");
+            } else {
+                addAutomationLog(`❌ Drive upload failed (${d.client} / ${d.topic}): ${d.reason}`, "err");
+            }
+            refreshDriveAssets();
+        } catch (_) {}
+    });
+
+    es.addEventListener("weekly-gen-started", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`📦 Weekly batch started: ${d.client} (${d.count} prompts)`, "info");
+        } catch (_) {}
+    });
+
+    es.addEventListener("weekly-approved", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`✓ Weekly approved: ${d.client} — ${d.scheduled} scheduled`, "ok");
+            refreshAllQueues();
+        } catch (_) {}
+    });
+
     /* ===== FB queue events ===== */
 
     es.addEventListener("fb-published", evt => {
@@ -2563,6 +2852,7 @@ async function clearLogs() {
 
     loadPosts();
     refreshAllQueues();
+    refreshGsaStatus();
     setInterval(loadPosts, 8000);
     setInterval(refreshQueuedPrompts, 10000); // refresh queued list every 10s
 

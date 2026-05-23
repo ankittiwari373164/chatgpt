@@ -466,13 +466,16 @@ async function handleSavePost(req, res) {
             client, prompt, generated: false
         }).lean();
 
-        let cronContext = null;
+        let cronContext    = null;
+        let weeklyContext  = null;
+
         if (queuedPrompt?.error) {
 
             try {
 
                 const parsed = JSON.parse(queuedPrompt.error);
-                cronContext = parsed.cronContext || null;
+                cronContext   = parsed.cronContext   || null;
+                weeklyContext = parsed.weeklyContext || null;
 
             } catch (_) {}
         }
@@ -482,7 +485,6 @@ async function handleSavePost(req, res) {
             { $set: {
                 generated: true,
                 image:     secureUrl,
-                // Clear the cronContext stash so we don't reprocess later
                 error:     ""
             }}
         );
@@ -496,9 +498,8 @@ async function handleSavePost(req, res) {
             hashtags:      post.hashtags,
             status:        post.status,
             createdAt:     post.createdAt,
-            // Tell the dashboard the server already owns the rest of the pipeline.
-            // Dashboard SSE handler must check this and skip auto-scheduling.
-            autoScheduled: !!cronContext
+            autoScheduled: !!cronContext,
+            weeklyBatch:   !!weeklyContext
         };
 
         broadcast("new-post", payload);
@@ -507,6 +508,51 @@ async function handleSavePost(req, res) {
             "✅ Image saved & broadcast:",
             secureUrl.slice(0, 80)
         );
+
+        /* ---------- Weekly batch? Upload to Drive instead of scheduling ---------- */
+
+        if (weeklyContext) {
+
+            console.log(
+                `📁 Image came from weekly batch — uploading to Drive for ${client}…`
+            );
+
+            (async () => {
+
+                try {
+
+                    const weeklyBatch = require("./lib/weeklyBatch");
+
+                    const r = await weeklyBatch.onImageGeneratedForWeekly({
+                        client,
+                        image:         imageToUpload,
+                        cloudinaryUrl: secureUrl,
+                        weeklyContext
+                    });
+
+                    broadcast("weekly-uploaded", {
+                        client,
+                        status:    "in-drive",
+                        topic:     weeklyContext.topic,
+                        date:      weeklyContext.calendarDate,
+                        driveLink: r.asset?.driveFileLink || ""
+                    });
+
+                } catch (e) {
+
+                    console.log("weekly upload error:", e.message);
+                    broadcast("weekly-uploaded", {
+                        client,
+                        status: "failed",
+                        topic:  weeklyContext.topic,
+                        date:   weeklyContext.calendarDate,
+                        reason: e.message
+                    });
+                }
+            })();
+
+            return res.json({ success: true, post: payload });
+        }
 
         /* ---------- Cron-triggered? Auto-caption + auto-schedule ---------- */
 
@@ -517,7 +563,6 @@ async function handleSavePost(req, res) {
                 `caption + Meta scheduling for ${client}…`
             );
 
-            // Don't block the HTTP response on this — kick it off async.
             (async () => {
 
                 try {
@@ -819,8 +864,18 @@ app.post("/save-client", requireMongo, async (req, res) => {
             email:       (b.email       || "").trim(),
             postSize:    b.postSize    || "1:1",
             postDays:    b.postDays    || "mwf",
-            chatLink:    (b.chatLink   || "").trim()
+            chatLink:    (b.chatLink   || "").trim(),
+            driveFolderUrl: (b.driveFolderUrl || "").trim()
         };
+
+        // Derive the folder ID for convenience
+        if (fields.driveFolderUrl) {
+            const drive = require("./lib/drive");
+            const id = drive.extractFolderId(fields.driveFolderUrl);
+            fields.driveFolderId = id || "";
+        } else {
+            fields.driveFolderId = "";
+        }
 
         // Only overwrite booleans if the caller actually sent them
         if (typeof b.contactInCaption === "boolean") fields.contactInCaption = b.contactInCaption;
@@ -2001,6 +2056,155 @@ app.post("/generate-all-now", requireMongo, async (req, res) => {
    INSTAGRAM PUBLISH QUEUE — list + cancel
 ============================================================ */
 
+/* ============================================================
+   SETTINGS: Google Service Account JSON
+============================================================ */
+
+app.get("/settings/google-sa", requireMongo, async (req, res) => {
+
+    try {
+
+        const drive = require("./lib/drive");
+
+        if (!await drive.isConfigured()) {
+            return res.json({ configured: false });
+        }
+
+        // Don't return the full private key
+        const { Session } = require("./db/models");
+        const doc = await Session.findOne({ name: "google-sa" }).lean();
+        const sa  = doc?.cookies || {};
+
+        res.json({
+            configured:   true,
+            client_email: sa.client_email,
+            project_id:   sa.project_id
+        });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post("/settings/google-sa", requireMongo, async (req, res) => {
+
+    try {
+
+        const json = req.body?.json;
+        if (!json || typeof json !== "object") {
+            return res.status(400).json({ error: "Send {json: <service account object>}" });
+        }
+
+        const drive = require("./lib/drive");
+        const info = await drive.saveServiceAccount(json);
+
+        res.json({ success: true, client_email: info.client_email });
+
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.delete("/settings/google-sa", requireMongo, async (req, res) => {
+
+    try {
+        const drive = require("./lib/drive");
+        await drive.clearServiceAccount();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   WEEKLY BATCH — generate + approve
+============================================================ */
+
+app.post("/weekly-gen/:client", requireMongo, async (req, res) => {
+
+    try {
+
+        const weeklyBatch = require("./lib/weeklyBatch");
+        const result = await weeklyBatch.generateWeek(req.params.client);
+
+        broadcast("weekly-gen-started", {
+            client: req.params.client,
+            count:  result.queued.filter(q => q.status === "queued").length
+        });
+
+        res.json({ success: true, ...result });
+
+    } catch (err) {
+        console.log("/weekly-gen error:", err.message);
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.post("/approve-week/:client", requireMongo, async (req, res) => {
+
+    try {
+
+        const weeklyBatch = require("./lib/weeklyBatch");
+        const result = await weeklyBatch.approveAndSchedule(req.params.client);
+
+        broadcast("weekly-approved", {
+            client:    req.params.client,
+            scheduled: result.scheduled
+        });
+
+        res.json({ success: true, ...result });
+
+    } catch (err) {
+        console.log("/approve-week error:", err.message);
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.get("/drive-assets/:client", requireMongo, async (req, res) => {
+
+    try {
+
+        const { DriveAsset } = require("./db/models");
+        const items = await DriveAsset.find({ client: req.params.client })
+            .sort({ calendarDate: 1 })
+            .limit(50)
+            .lean();
+        res.json({ items });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* GET /drive-folder/:client — list the LIVE state of the client's Drive
+   folder so the dashboard can show what's currently in there. */
+
+app.get("/drive-folder/:client", requireMongo, async (req, res) => {
+
+    try {
+
+        const { Client } = require("./db/models");
+        const drive = require("./lib/drive");
+
+        const client = await Client.findOne({ name: req.params.client }).lean();
+        if (!client) return res.status(404).json({ error: "Client not found" });
+
+        const folderId = drive.extractFolderId(client.driveFolderUrl || "");
+        if (!folderId) return res.json({ folderId: null, files: [] });
+
+        if (!await drive.isConfigured()) {
+            return res.status(400).json({ error: "Google Service Account not configured" });
+        }
+
+        const files = await drive.listFiles(folderId);
+        res.json({ folderId, files });
+
+    } catch (err) {
+        console.log("/drive-folder error:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get("/ig-queue", requireMongo, async (req, res) => {
 
     try {
@@ -2372,7 +2576,14 @@ app.post("/save", requireMongo, handleSavePost);
     try {
 
         await connect();
-        dailyCron.start();
+        // Daily cron is deprecated in favor of the weekly batch flow.
+        // Re-enable by setting LEGACY_DAILY_CRON=true in your env.
+        if (String(process.env.LEGACY_DAILY_CRON || "").toLowerCase() === "true") {
+            dailyCron.start();
+            console.log("⚠ Legacy daily cron enabled via LEGACY_DAILY_CRON=true");
+        } else {
+            console.log("ℹ Daily cron disabled. Using weekly batch flow.");
+        }
 
         // Expose SSE broadcaster so igQueue can publish events
         global.__sseBroadcast = (payload) => broadcast(payload.type || "event", payload);

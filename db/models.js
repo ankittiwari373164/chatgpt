@@ -31,9 +31,11 @@ const ClientSchema = new Schema({
     footerUrl:   String,
     samplePosts: [String],
     chatLink:    String,
-    storyEnabled: { type: Boolean, default: false },       // post a Story alongside the feed post
-    songUrl:      String,                                  // Cloudinary URL of audio (mp3) for stories
-    songPublicId: String,                                  // Cloudinary public_id of the audio (for l_video overlay)
+    storyEnabled: { type: Boolean, default: false },
+    songUrl:      String,
+    songPublicId: String,
+    driveFolderUrl: String,                                // per-client Google Drive folder URL
+    driveFolderId:  String,                                // parsed from URL (cached for performance)
     productsCache: {
         items:     [Schema.Types.Mixed],
         scrapedAt: Date,
@@ -196,16 +198,46 @@ const FbQueueSchema = new Schema({
     createdAt:   { type: Date, default: Date.now }
 });
 
+/* ---------- DRIVE ASSET (weekly batch artifacts) ---------- */
+/* One per generated post, lives until published. Tracks the
+   file's life cycle from "generating" through "approved"
+   and "scheduled". */
+
+const DriveAssetSchema = new Schema({
+    client:        { type: String, required: true, index: true },
+    weekStart:     { type: String, index: true },   // "YYYY-MM-DD" Monday of the target week
+    calendarDate:  String,                          // "YYYY-MM-DD" the calendar slot this post is for
+    topic:         String,                          // calendar topic — becomes filename
+    fileName:      String,                          // "<topic>.png" (sanitized)
+    driveFileId:   String,                          // Google Drive file ID
+    driveFileLink: String,                          // viewable Drive link
+    cloudinaryUrl: String,                          // the original Cloudinary URL (for re-scheduling)
+    caption:       String,                          // Groq-generated caption
+    hashtags:      String,                          // Groq-generated hashtags
+    captionSignature: String,                       // hash of (fileName + client name) so we know when to regenerate
+    status:        { type: String, default: "queued", index: true },
+                   // queued | generating | in-drive | approved | scheduled | published | failed
+    promptId:      Number,                          // Prompt._legacyId for this generation
+    fbJobId:       String,                          // populated after scheduling
+    igJobId:       String,
+    igStoryJobId:  String,
+    error:         String,
+    createdAt:     { type: Date, default: Date.now }
+}, { timestamps: true });
+
+DriveAssetSchema.index({ client: 1, weekStart: 1 });
+
 module.exports = {
-    Client:    mongoose.model("Client",    ClientSchema),
-    Prompt:    mongoose.model("Prompt",    PromptSchema),
-    Post:      mongoose.model("Post",      PostSchema),
-    Scheduled: mongoose.model("Scheduled", ScheduledSchema),
-    Calendar:  mongoose.model("Calendar",  CalendarSchema),
-    Session:   mongoose.model("Session",   SessionSchema),
-    MetaPage:  mongoose.model("MetaPage",  MetaPageSchema),
-    RunLog:    mongoose.model("RunLog",    RunLogSchema),
-    Log:       mongoose.model("Log",       LogSchema),
-    IgQueue:   mongoose.model("IgQueue",   IgQueueSchema),
-    FbQueue:   mongoose.model("FbQueue",   FbQueueSchema)
+    Client:     mongoose.model("Client",     ClientSchema),
+    Prompt:     mongoose.model("Prompt",     PromptSchema),
+    Post:       mongoose.model("Post",       PostSchema),
+    Scheduled:  mongoose.model("Scheduled",  ScheduledSchema),
+    Calendar:   mongoose.model("Calendar",   CalendarSchema),
+    Session:    mongoose.model("Session",    SessionSchema),
+    MetaPage:   mongoose.model("MetaPage",   MetaPageSchema),
+    RunLog:     mongoose.model("RunLog",     RunLogSchema),
+    Log:        mongoose.model("Log",        LogSchema),
+    IgQueue:    mongoose.model("IgQueue",    IgQueueSchema),
+    FbQueue:    mongoose.model("FbQueue",    FbQueueSchema),
+    DriveAsset: mongoose.model("DriveAsset", DriveAssetSchema)
 };
