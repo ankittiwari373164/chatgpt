@@ -31,9 +31,6 @@ const ClientSchema = new Schema({
     footerUrl:   String,
     samplePosts: [String],
     chatLink:    String,
-    storyEnabled: { type: Boolean, default: false },
-    songUrl:      String,
-    songPublicId: String,
     driveFolderUrl: String,                                // per-client Google Drive folder URL
     driveFolderId:  String,                                // parsed from URL (cached for performance)
     productsCache: {
@@ -117,6 +114,9 @@ const SessionSchema = new Schema({
 });
 
 /* ---------- META PAGE CACHE ---------- */
+/* (No longer used after MetaFlow takes over publishing,
+   but the schema is retained as a no-op in case any legacy
+   records exist in your DB.) */
 
 const MetaPageSchema = new Schema({
     pageId:          { type: String, unique: true },
@@ -130,7 +130,7 @@ const MetaPageSchema = new Schema({
 
 const RunLogSchema = new Schema({
     runAt:   { type: Date, default: Date.now, index: true },
-    type:    String, // "daily-cron" | "manual"
+    type:    String,
     summary: String,
     detail:  Schema.Types.Mixed
 });
@@ -139,88 +139,30 @@ const RunLogSchema = new Schema({
 
 const LogSchema = new Schema({
     at:      { type: Date, default: Date.now, index: true },
-    level:   { type: String, default: "info" }, // "ok" | "info" | "warn" | "err"
+    level:   { type: String, default: "info" },
     message: String
 });
 
 LogSchema.index({ at: -1 });
 
-/* ---------- INSTAGRAM PUBLISH QUEUE ---------- */
-/* Each pending IG post: jobId, scheduled time, media URL + caption,
-   the IG account ID + page token to call media_publish with. The
-   server holds a setTimeout per pending job and fires it at the
-   right moment. Server restart → rearmIgQueue() re-schedules them. */
-
-const IgQueueSchema = new Schema({
-    jobId:       { type: String, required: true, unique: true, index: true },
-    client:      { type: String, index: true },
-    postId:      Number,                // _legacyId of the Post that created this
-    pageName:    String,                // human-readable for dashboard
-    accountName: String,                // e.g. "@brandhandle" for dashboard
-    igId:        String,                // IG Business Account ID
-    pageId:      String,                // FB Page ID (parent)
-    fbToken:     String,                // page token for IG publishing
-    caption:     String,
-    hashtags:    String,
-    mediaUrl:    String,                // publicly accessible URL (Cloudinary)
-    mediaType:   { type: String, default: "image" },  // "image" | "video" | "story"
-    scheduledAt: { type: Date, required: true, index: true },
-    status:      { type: String, default: "pending", index: true },
-                 // "pending" | "processing" | "done" | "failed" | "canceled"
-    metaPostId:  String,                // populated on success
-    error:       String,                // populated on failure
-    attempts:    { type: Number, default: 0 },
-    createdAt:   { type: Date, default: Date.now }
-});
-
-/* ---------- FACEBOOK PUBLISH QUEUE ---------- */
-/* Mirror of IgQueue. Holds FB posts in a server-side queue
-   so we control the publish timing precisely (instead of relying
-   on Meta's scheduled_publish_time which has quirks). */
-
-const FbQueueSchema = new Schema({
-    jobId:       { type: String, required: true, unique: true, index: true },
-    client:      { type: String, index: true },
-    postId:      Number,
-    pageName:    String,                // FB Page name
-    accountName: String,
-    pageId:      String,                // FB Page ID — POST target
-    pageToken:   String,                // page access token
-    caption:     String,
-    hashtags:    String,
-    mediaUrl:    String,                // Cloudinary URL — fetched at fire time
-    mediaType:   { type: String, default: "image" },
-    scheduledAt: { type: Date, required: true, index: true },
-    status:      { type: String, default: "pending", index: true },
-    metaPostId:  String,
-    error:       String,
-    attempts:    { type: Number, default: 0 },
-    createdAt:   { type: Date, default: Date.now }
-});
-
 /* ---------- DRIVE ASSET (weekly batch artifacts) ---------- */
-/* One per generated post, lives until published. Tracks the
-   file's life cycle from "generating" through "approved"
-   and "scheduled". */
+/* Tracks the file's life cycle from "queued" through "in-drive". */
 
 const DriveAssetSchema = new Schema({
     client:        { type: String, required: true, index: true },
-    weekStart:     { type: String, index: true },   // "YYYY-MM-DD" Monday of the target week
-    calendarDate:  String,                          // "YYYY-MM-DD" the calendar slot this post is for
-    topic:         String,                          // calendar topic — becomes filename
-    fileName:      String,                          // "<topic>.png" (sanitized)
-    driveFileId:   String,                          // Google Drive file ID
-    driveFileLink: String,                          // viewable Drive link
-    cloudinaryUrl: String,                          // the original Cloudinary URL (for re-scheduling)
-    caption:       String,                          // Groq-generated caption
-    hashtags:      String,                          // Groq-generated hashtags
-    captionSignature: String,                       // hash of (fileName + client name) so we know when to regenerate
+    weekStart:     { type: String, index: true },
+    calendarDate:  String,
+    topic:         String,
+    fileName:      String,
+    driveFileId:   String,
+    driveFileLink: String,
+    cloudinaryUrl: String,
+    caption:       String,
+    hashtags:      String,
+    captionSignature: String,
     status:        { type: String, default: "queued", index: true },
-                   // queued | generating | in-drive | approved | scheduled | published | failed
-    promptId:      Number,                          // Prompt._legacyId for this generation
-    fbJobId:       String,                          // populated after scheduling
-    igJobId:       String,
-    igStoryJobId:  String,
+                   // queued | generating | in-drive | failed
+    promptId:      Number,
     error:         String,
     createdAt:     { type: Date, default: Date.now }
 }, { timestamps: true });
@@ -237,7 +179,5 @@ module.exports = {
     MetaPage:   mongoose.model("MetaPage",   MetaPageSchema),
     RunLog:     mongoose.model("RunLog",     RunLogSchema),
     Log:        mongoose.model("Log",        LogSchema),
-    IgQueue:    mongoose.model("IgQueue",    IgQueueSchema),
-    FbQueue:    mongoose.model("FbQueue",    FbQueueSchema),
     DriveAsset: mongoose.model("DriveAsset", DriveAssetSchema)
 };
