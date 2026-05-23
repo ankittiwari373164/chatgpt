@@ -3,6 +3,10 @@
 ============================================================ */
 
 let schedulerQueue = [];   // posts currently displayed in file-queue
+let metaTargets    = [];   // pages fetched from /meta/pages
+let selectedTargets = new Set();  // pageId strings selected
+let alreadyAutomated = new Set(); // post.id we've already auto-pushed
+let currentFreq = "custom";
 
 /* ============================================================
    AUTOMATION LOG
@@ -141,6 +145,7 @@ function renderClientsList(clients) {
                     ${pillCount ? `<span style="color:#7eff7e;">· ${pillCount} products</span>` : ''}
                     ${sampleCount ? `<span style="color:#ffd97e;">· ${sampleCount} sample${sampleCount > 1 ? "s" : ""}</span>` : ''}
                     ${c.contactInCaption === false ? `<span style="color:#f88;">· 🚫 no contact in caption</span>` : ''}
+                    ${c.storyEnabled ? `<span style="color:#ff97e7;">· 📱 story${c.songUrl ? " 🎵" : ""}</span>` : ''}
                     ${c.driveFolderUrl ? `<span style="color:#7eaaff;">· 📁 <a href="${escapeHTML(c.driveFolderUrl)}" target="_blank" style="color:#7eaaff;">drive</a></span>` : '<span style="color:#f88;">· ⚠ no Drive folder</span>'}
                     ${c.chatLink ? `<span style="color:#888;">· <a href="${escapeHTML(c.chatLink)}" target="_blank" style="color:#7eaaff;">chat</a></span>` : ''}
                     ${c.website ? `<span style="color:#666;">· <a href="${escapeHTML(c.website)}" target="_blank" style="color:#7eaaff;">site</a></span>` : ''}
@@ -354,7 +359,8 @@ async function saveClient() {
         driveFolderUrl: $("driveFolderUrl")?.value.trim() || "",
         postSize:    getRadio("postSize") || "1:1",
         postDays:    getRadio("postDays") || "mwf",
-        contactInCaption: !!$("contactInCaption")?.checked
+        contactInCaption: !!$("contactInCaption")?.checked,
+        storyEnabled:     !!$("storyEnabled")?.checked
     };
 
     if (!payload.name) {
@@ -383,6 +389,13 @@ async function saveClient() {
     if (Array.isArray(window.__currentSampleUrls)) {
         // User may have removed some via remove buttons → send the final list as replacement
         payload.samplePostsUrls = window.__currentSampleUrls;
+    }
+
+    // Song (audio file for stories)
+    if (window.__pendingSongData === "__REMOVE__") {
+        payload.songUrl = "__REMOVE__";
+    } else if (window.__pendingSongData) {
+        payload.songDataUrl = window.__pendingSongData;
     }
 
     const btn = document.querySelector('[onclick="saveClient()"]');
@@ -446,8 +459,16 @@ async function editClient(encodedName) {
         set("driveFolderUrl", c.driveFolderUrl);
 
         const cic = document.getElementById("contactInCaption");
+        const sen = document.getElementById("storyEnabled");
         // undefined = treat as ON (default for existing clients without the field)
         if (cic) cic.checked = c.contactInCaption === undefined ? true : !!c.contactInCaption;
+        if (sen) sen.checked = !!c.storyEnabled;
+        toggleStoryPanel();
+
+        // Song
+        window.__pendingSongData = null;
+        window.__currentSongUrl = c.songUrl || "";
+        renderSongPreview();
 
         const nameEl = document.getElementById("name");
         if (nameEl) nameEl.disabled = true;
@@ -513,7 +534,10 @@ function cancelEdit() {
     if (ddR) ddR.checked = true;
 
     const cic = document.getElementById("contactInCaption");
+    const sen = document.getElementById("storyEnabled");
     if (cic) cic.checked = true;    // default ON for new clients
+    if (sen) sen.checked = false;
+    toggleStoryPanel();
 
     resetLogoFooterUI();
 
@@ -523,6 +547,13 @@ function cancelEdit() {
     renderSamplePreviews();
     const sf = document.getElementById("sampleFiles");
     if (sf) sf.value = "";
+
+    // Reset song
+    window.__pendingSongData = null;
+    window.__currentSongUrl = "";
+    const sng = document.getElementById("songFile");
+    if (sng) sng.value = "";
+    renderSongPreview();
 
     const eb = document.getElementById("editingBadge");
     const cb = document.getElementById("cancelEditBtn");
@@ -668,6 +699,90 @@ function removePendingSample(i) {
 }
 
 /* ============================================================
+   SONG (audio file for stories)
+============================================================ */
+
+window.__pendingSongData = null;
+window.__currentSongUrl = "";
+
+function toggleStoryPanel() {
+    const enabled = !!document.getElementById("storyEnabled")?.checked;
+    const panel = document.getElementById("songPanel");
+    if (panel) panel.style.display = enabled ? "block" : "none";
+}
+
+function onSongChosen(input) {
+
+    const file = input.files && input.files[0];
+    if (!file) return;
+
+    // Soft size check — 30 MB IG max
+    if (file.size > 30 * 1024 * 1024) {
+        alert("Song is too large. Instagram limits audio to ~30 MB.");
+        input.value = "";
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+        window.__pendingSongData = reader.result;
+        renderSongPreview(file.name);
+    };
+    reader.onerror = () => alert("Could not read the audio file.");
+    reader.readAsDataURL(file);
+}
+
+function renderSongPreview(pendingName) {
+
+    const box = document.getElementById("songPreview");
+    if (!box) return;
+
+    if (window.__pendingSongData === "__REMOVE__") {
+        box.innerHTML = '<span style="color:#f88;">Song will be removed on save</span>';
+        return;
+    }
+
+    if (window.__pendingSongData) {
+        const name = pendingName || "new song";
+        box.innerHTML = `
+            <span style="color:#7eff7e;">🎵 ${escapeHTML(name)}</span>
+            <span style="color:#666; margin-left:6px; font-size:11px;">(pending upload)</span>`;
+        return;
+    }
+
+    if (window.__currentSongUrl) {
+        const fileName = window.__currentSongUrl.split("/").pop() || "song.mp3";
+        box.innerHTML = `
+            <audio src="${escapeHTML(window.__currentSongUrl)}" controls
+                style="width:100%; height:32px; margin-bottom:6px;"></audio>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                <span style="color:#888; font-size:11px;">${escapeHTML(fileName)}</span>
+                <button onclick="removeSong()"
+                    style="background:#3a1010; border:1px solid #5a2020;
+                           color:#ffaaaa; padding:4px 10px; border-radius:5px;
+                           cursor:pointer; font-size:11px;">
+                    × Remove
+                </button>
+            </div>`;
+        return;
+    }
+
+    box.innerHTML = 'No song set';
+}
+
+function removeSong() {
+    window.__pendingSongData = "__REMOVE__";
+    window.__currentSongUrl = "";
+    const sf = document.getElementById("songFile");
+    if (sf) sf.value = "";
+    renderSongPreview();
+}
+
+/* ============================================================
+   INSTAGRAM PUBLISH QUEUE
+============================================================ */
+
+/* ============================================================
    GOOGLE SERVICE ACCOUNT
 ============================================================ */
 
@@ -768,36 +883,35 @@ async function generateWeekForClient() {
     }
 }
 
-/* Re-queue a single Drive asset for image regeneration.
-   When the new image arrives, the old Drive file is deleted
-   and replaced. */
-
-async function regenerateAsset(assetId, topic) {
+async function approveWeekForClient() {
+    const name = document.getElementById("clients")?.value?.trim();
+    if (!name) return alert("Pick a client first");
 
     if (!confirm(
-        `Regenerate "${topic || "this image"}"?\n\n` +
-        `A fresh prompt will be queued. When Tampermonkey delivers ` +
-        `the new image, the old file in Drive will be replaced.`
+        `Approve and schedule "${name}"?\n\n` +
+        `The server will read the live Drive folder and schedule everything ` +
+        `that's in it to FB + Instagram for the next 7 posting days.`
     )) return;
 
-    addAutomationLog(`🔄 Regenerating "${topic}"…`, "info");
+    addAutomationLog(`✓ Approving "${name}"…`, "info");
 
     try {
-        const r = await fetch("/regenerate-asset/" + encodeURIComponent(assetId), {
-            method:  "POST"
-        });
+        const r = await fetch("/approve-week/" + encodeURIComponent(name), { method: "POST" });
         const d = await r.json();
-
         if (r.ok && d.success) {
-            addAutomationLog(`✓ Re-queued — waiting for Tampermonkey…`, "ok");
+            addAutomationLog(
+                `✓ "${name}" approved — ${d.scheduled} scheduled` +
+                (d.items?.filter(i=>i.status==="failed").length ? ` (${d.items.filter(i=>i.status==="failed").length} failed)` : ""),
+                "ok"
+            );
             refreshDriveAssets();
-            refreshQueuedPrompts();
+            refreshAllQueues();
         } else {
-            addAutomationLog(`❌ Regenerate failed: ${d.error || "unknown"}`, "err");
+            addAutomationLog(`❌ Approve failed: ${d.error || "unknown"}`, "err");
             alert("Failed: " + (d.error || "unknown"));
         }
     } catch (e) {
-        addAutomationLog(`❌ Regenerate failed: ${e.message}`, "err");
+        addAutomationLog(`❌ Approve failed: ${e.message}`, "err");
     }
 }
 
@@ -884,14 +998,11 @@ async function refreshDriveAssets() {
             driveFiles.forEach(f => {
                 const asset = assetByFileName.get(f.name);
                 const status = asset?.status || "in-drive";
+                const isScheduled = status === "scheduled" || status === "published";
                 const statusColor =
-                    status === "in-drive" ? "#7eff7e"
-                  : status === "queued"   ? "#ffd97e"
+                    status === "scheduled" ? "#7eaaff"
+                  : status === "published" ? "#7eff7e"
                   : "#888";
-
-                // Asset ID needed for regenerate. If no asset row, button is disabled.
-                const assetId = asset?._id || "";
-                const escTopic = escapeHTML((asset?.topic || f.name.replace(/\.[^.]+$/, "")).replace(/'/g, "\\'"));
 
                 html += `
                 <div style="background:#161616; border:1px solid #2a2a2a; border-radius:6px;
@@ -907,14 +1018,6 @@ async function refreshDriveAssets() {
                     ${asset?.calendarDate
                         ? `<span style="color:#666; font-size:11px;">→ ${escapeHTML(asset.calendarDate)}</span>`
                         : ""}
-                    ${assetId
-                        ? `<button onclick="regenerateAsset('${assetId}','${escTopic}')"
-                            style="background:#2e1a3a; border:1px solid #4a2c5e;
-                                   color:#d8a4f0; padding:5px 10px; border-radius:5px;
-                                   cursor:pointer; font-size:11px; white-space:nowrap;">
-                            🔄 Regenerate
-                          </button>`
-                        : `<span style="color:#666; font-size:10px; padding:5px 10px;">no asset</span>`}
                 </div>`;
             });
         } else if (!inProgress.length) {
@@ -934,6 +1037,197 @@ async function refreshDriveAssets() {
     }
 }
 
+async function refreshQueue(platform) {
+
+    const endpoint  = platform === "fb" ? "/fb-queue" : "/ig-queue";
+    const listId    = platform === "fb" ? "fbQueueList"  : "igQueueList";
+    const countId   = platform === "fb" ? "fbQueueCount" : "igQueueCount";
+    const platformName = platform === "fb" ? "Facebook" : "Instagram";
+
+    try {
+
+        const r = await fetch(endpoint);
+        const d = await r.json();
+
+        const list = document.getElementById(listId);
+        const countEl = document.getElementById(countId);
+
+        const items = d.items || [];
+        if (countEl) countEl.textContent = items.length;
+
+        if (!list) return;
+
+        if (!items.length) {
+            list.innerHTML = `
+                <div style="background:#161616; border:1px dashed #2a2a2a; border-radius:8px;
+                            padding:24px; text-align:center; color:#666;">
+                    No ${platformName} posts queued.
+                    <div style="font-size:11px; color:#444; margin-top:4px;">
+                        Posts appear here while waiting to publish.
+                    </div>
+                </div>`;
+            return;
+        }
+
+        const now = Date.now();
+
+        list.innerHTML = items.map(job => {
+
+            const due = new Date(job.scheduledAt);
+            const msUntil = due.getTime() - now;
+            const status = job.status;
+
+            const statusColor =
+                status === "processing" ? "#7eaaff"
+              : status === "pending"    ? "#ffd97e"
+              : status === "done"       ? "#7eff7e"
+              : status === "failed"     ? "#ff7e7e"
+              : status === "canceled"   ? "#888"
+              :                            "#888";
+
+            const countdownText =
+                status === "processing" ? "publishing now…"
+              : msUntil < 0             ? "due — firing"
+              : msUntil < 60000         ? "< 1 min"
+              : msUntil < 3600000       ? Math.floor(msUntil / 60000) + " min"
+              : msUntil < 86400000      ? Math.floor(msUntil / 3600000) + " hr"
+              :                            Math.floor(msUntil / 86400000) + " days";
+
+            return `
+            <div style="background:#161616; border:1px solid #2a2a2a; border-radius:8px;
+                        padding:12px 14px; margin-bottom:6px; display:flex; gap:12px; align-items:center;">
+                ${job.mediaUrl
+                    ? `<img src="${escapeHTML(job.mediaUrl)}" style="width:48px; height:48px;
+                        object-fit:cover; border-radius:6px; border:1px solid #2a2a2a; flex-shrink:0;">`
+                    : ''}
+                <div style="flex:1; min-width:0;">
+                    <div style="font-weight:600; font-size:13px;">
+                        ${escapeHTML(job.accountName || job.pageName || job.client || "?")}
+                        ${job.mediaType === "story"
+                            ? '<span style="font-size:10px; background:#ff97e7; color:#400022; padding:1px 6px; border-radius:8px; margin-left:6px; font-weight:600;">STORY</span>'
+                            : ''}
+                        <span style="font-size:10px; color:#666; font-weight:normal; margin-left:6px;">
+                            ${job.client && job.client !== job.accountName ? '· ' + escapeHTML(job.client) : ''}
+                        </span>
+                    </div>
+                    <div style="font-size:11px; color:#888; margin-top:2px; overflow:hidden;
+                                text-overflow:ellipsis; white-space:nowrap; max-width:420px;">
+                        ${job.mediaType === "story"
+                            ? '<em>Instagram Story (24h)' + (job.mediaUrl?.endsWith('.mp4') ? ' · with audio' : '') + '</em>'
+                            : escapeHTML(String(job.caption || "").slice(0, 80))}
+                    </div>
+                    <div style="font-size:11px; margin-top:4px;">
+                        <span style="color:${statusColor};">● ${status}</span>
+                        <span style="color:#666; margin-left:8px;">→ ${due.toLocaleString()}</span>
+                        ${status === "pending" || status === "processing"
+                            ? `<span style="color:#7eaaff; margin-left:8px;">(${countdownText})</span>`
+                            : ''}
+                    </div>
+                    ${job.error
+                        ? `<div style="font-size:11px; color:#ff7e7e; margin-top:2px;">${escapeHTML(job.error.slice(0, 200))}</div>`
+                        : ''}
+                </div>
+                ${(status === "pending" || status === "processing")
+                    ? `<button
+                        onclick="cancelQueueJob('${platform}', '${job.jobId}')"
+                        style="background:#3a1010; border:1px solid #5a2020;
+                               color:#ffaaaa; padding:7px 12px; border-radius:6px;
+                               cursor:pointer; font-size:12px; flex-shrink:0;">
+                        🗑 Cancel
+                    </button>`
+                    : ''}
+            </div>`;
+        }).join("");
+
+    } catch (e) {
+
+        const list = document.getElementById(listId);
+        if (list) list.innerHTML = `<div style="color:#ff7e7e; padding:10px;">Failed to load: ${escapeHTML(e.message)}</div>`;
+    }
+}
+
+async function cancelQueueJob(platform, jobId) {
+
+    const platformName = platform === "fb" ? "Facebook" : "Instagram";
+
+    if (!confirm(`Cancel this ${platformName} post? It will not be published.`)) return;
+
+    const endpoint = platform === "fb" ? "/fb-queue/" : "/ig-queue/";
+
+    try {
+
+        const r = await fetch(endpoint + encodeURIComponent(jobId), { method: "DELETE" });
+        const d = await r.json();
+
+        if (d.success) {
+            addAutomationLog(`✓ Canceled ${platformName} post ${jobId}`, "ok");
+            refreshQueue(platform);
+        } else {
+            addAutomationLog(`❌ Cancel failed: ${d.error || "unknown"}`, "err");
+        }
+
+    } catch (e) {
+        addAutomationLog(`❌ Cancel failed: ${e.message}`, "err");
+    }
+}
+
+// Backwards-compat wrappers
+function refreshIgQueue() { return refreshQueue("ig"); }
+function refreshFbQueue() { return refreshQueue("fb"); }
+function refreshAllQueues() {
+    refreshFbQueue();
+    refreshIgQueue();
+}
+
+let __activeQueueTab = "fb";
+
+function switchQueueTab(tab) {
+
+    __activeQueueTab = tab;
+
+    const fbList = document.getElementById("fbQueueList");
+    const igList = document.getElementById("igQueueList");
+    const fbTab = document.getElementById("qTab_fb");
+    const igTab = document.getElementById("qTab_ig");
+
+    if (tab === "fb") {
+        if (fbList) fbList.style.display = "block";
+        if (igList) igList.style.display = "none";
+        if (fbTab) {
+            fbTab.style.background = "#0f1a2e";
+            fbTab.style.borderColor = "#1d3654";
+            fbTab.style.color = "#7eaaff";
+            fbTab.style.borderBottom = "none";
+        }
+        if (igTab) {
+            igTab.style.background = "#161616";
+            igTab.style.borderColor = "#2a2a2a";
+            igTab.style.color = "#888";
+            igTab.style.borderBottom = "1px solid #2a2a2a";
+        }
+    } else {
+        if (fbList) fbList.style.display = "none";
+        if (igList) igList.style.display = "block";
+        if (igTab) {
+            igTab.style.background = "#2e0f1a";
+            igTab.style.borderColor = "#541d36";
+            igTab.style.color = "#ff7eaa";
+            igTab.style.borderBottom = "none";
+        }
+        if (fbTab) {
+            fbTab.style.background = "#161616";
+            fbTab.style.borderColor = "#2a2a2a";
+            fbTab.style.color = "#888";
+            fbTab.style.borderBottom = "1px solid #2a2a2a";
+        }
+    }
+}
+
+// Auto-refresh BOTH queues every 30 sec
+setInterval(() => {
+    if (document.getElementById("fbQueueList")) refreshFbQueue();
+    if (document.getElementById("igQueueList")) refreshIgQueue();
+}, 30000);
 
 /* ============================================================
    CALENDAR
@@ -1253,6 +1547,323 @@ async function generateCreative(client, item, btn) {
    GENERATE FOR ALL CLIENTS (manual morning button)
 ============================================================ */
 
+async function generateForAllClients() {
+
+    if (!confirm(
+        "Run the full pipeline (generate image → caption → schedule to Meta) " +
+        "for EVERY client right now?\n\n" +
+        "This will take a few minutes."
+    )) return;
+
+    const btn = document.getElementById("runAllBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Running…"; }
+
+    addAutomationLog("🌅 Triggering pipeline for ALL clients…", "warn");
+
+    try {
+
+        const r = await fetch("/generate-all-now", { method: "POST" });
+        const d = await r.json();
+
+        if (d.success) {
+
+            addAutomationLog(
+                "✅ Background run started. Check the logs below as each " +
+                "client completes.",
+                "ok"
+            );
+
+        } else {
+
+            addAutomationLog("❌ " + (d.error || "failed to start"), "err");
+        }
+
+    } catch (e) {
+
+        addAutomationLog("Network error: " + e.message, "err");
+
+    } finally {
+
+        // Keep button disabled for 60s — background run takes a while
+        setTimeout(() => {
+
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = "🌅 Generate & Schedule for ALL Clients";
+            }
+
+        }, 60000);
+    }
+}
+
+/* ============================================================
+   META TARGETS
+============================================================ */
+
+async function loadMetaTargets() {
+
+    try {
+
+        const response = await fetch("/meta/pages");
+        const data     = await response.json();
+
+        // Server returns either an array OR {error, pages: []}
+        if (Array.isArray(data)) {
+
+            metaTargets = data;
+
+        } else {
+
+            metaTargets = data.pages || [];
+
+            if (data.error) {
+
+                document.getElementById("targetsHelp").textContent =
+                    "⚠ " + data.error;
+
+                addAutomationLog(data.error, "err");
+                return;
+            }
+        }
+
+        renderTargets();
+
+    } catch (e) {
+
+        console.log(e);
+        document.getElementById("targetsHelp").textContent =
+            "Could not load Meta pages — " + e.message;
+    }
+}
+
+function renderTargets() {
+
+    const grid = document.getElementById("targetsGrid");
+    const help = document.getElementById("targetsHelp");
+    if (!grid) return;
+
+    grid.innerHTML = "";
+
+    if (!metaTargets.length) {
+
+        help.textContent =
+            "No Meta pages found. Check META_ACCESS_TOKEN in .env.";
+        return;
+    }
+
+    help.textContent =
+        `Found ${metaTargets.length} page(s). Pages are auto-selected per post's client.`;
+
+    metaTargets.forEach(page => {
+
+        const isSelectedFb = selectedTargets.has(page.pageId);
+        const isSelectedIg = selectedTargets.has(page.pageId + "_ig");
+
+        const fbTile = document.createElement("div");
+        fbTile.className =
+            "target-tile" + (isSelectedFb ? " selected" : "");
+        fbTile.dataset.pageId = page.pageId;
+        fbTile.dataset.kind   = "facebook";
+        fbTile.innerHTML = `
+          <div class="target-icon">📘</div>
+          <div class="target-name">${page.pageName}</div>
+          <div class="target-sub">Facebook Page</div>
+        `;
+        fbTile.onclick = () => toggleTargetTile(fbTile, page.pageId);
+        grid.appendChild(fbTile);
+
+        if (page.instagramId) {
+
+            const igTile = document.createElement("div");
+            igTile.className =
+                "target-tile ig" + (isSelectedIg ? " selected" : "");
+            igTile.dataset.pageId = page.pageId;
+            igTile.dataset.kind   = "instagram";
+            igTile.innerHTML = `
+              <div class="target-icon">📸</div>
+              <div class="target-name">${page.pageName}</div>
+              <div class="target-sub">Instagram Business</div>
+            `;
+            igTile.onclick = () => toggleTargetTile(igTile, page.pageId + "_ig");
+            grid.appendChild(igTile);
+        }
+    });
+}
+
+/* ============================================================
+   CLIENT → PAGE MATCHING
+   Fuzzy-match a client name against Meta pages, e.g.
+     "Manofox"          → "Manofox Pvt."
+     "Sehatfull"        → "Sehatfull Foods"
+     "Bon Shubharambh"  → "Bon Shubharambh Play School and Day Care"
+============================================================ */
+
+function normalizeName(s) {
+
+    return (s || "")
+        .toLowerCase()
+        .replace(/\b(pvt|ltd|llp|inc|co|company)\.?\b/g, "")
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+}
+
+function findPageForClient(clientName) {
+
+    if (!clientName || !metaTargets.length) return null;
+
+    const target = normalizeName(clientName);
+    if (!target) return null;
+
+    // 1. exact normalized match
+    let hit = metaTargets.find(
+        p => normalizeName(p.pageName) === target
+    );
+    if (hit) return hit;
+
+    // 2. page name STARTS WITH client name  (Manofox → Manofox Pvt.)
+    hit = metaTargets.find(p =>
+        normalizeName(p.pageName).startsWith(target)
+    );
+    if (hit) return hit;
+
+    // 3. client name STARTS WITH page name
+    hit = metaTargets.find(p =>
+        target.startsWith(normalizeName(p.pageName))
+    );
+    if (hit) return hit;
+
+    // 4. token overlap — at least one word in common, score = #common tokens
+    const cTokens = new Set(target.split(" ").filter(Boolean));
+
+    let best = null;
+    let bestScore = 0;
+
+    for (const p of metaTargets) {
+
+        const pTokens = normalizeName(p.pageName).split(" ").filter(Boolean);
+        let score = 0;
+        for (const t of pTokens) if (cTokens.has(t)) score++;
+        if (score > bestScore) { bestScore = score; best = p; }
+    }
+
+    return bestScore > 0 ? best : null;
+}
+
+function toggleTargetTile(tile, key) {
+
+    if (selectedTargets.has(key)) {
+        selectedTargets.delete(key);
+        tile.classList.remove("selected");
+    } else {
+        selectedTargets.add(key);
+        tile.classList.add("selected");
+    }
+}
+
+function getSelectedTargets() {
+
+    // Build the array the backend expects
+    const out = [];
+
+    metaTargets.forEach(page => {
+
+        const wantsFb = selectedTargets.has(page.pageId);
+        const wantsIg = selectedTargets.has(page.pageId + "_ig");
+
+        if (!wantsFb && !wantsIg) return;
+
+        out.push({
+            pageName:        page.pageName,
+            pageId:          wantsFb ? page.pageId : null,
+            pageAccessToken: page.pageAccessToken,
+            instagramId:     wantsIg ? page.instagramId : null
+        });
+    });
+
+    return out;
+}
+
+/* ============================================================
+   FREQUENCY + DAYS
+============================================================ */
+
+function selectFreq(btn) {
+
+    document.querySelectorAll(".freq-opt")
+            .forEach(b => b.classList.remove("active"));
+
+    btn.classList.add("active");
+    currentFreq = btn.dataset.freq;
+
+    document.getElementById("daysWrap").style.display =
+        (currentFreq === "custom") ? "" : "none";
+}
+
+function toggleDay(el) {
+
+    el.classList.toggle("selected");
+}
+
+function getSelectedDays() {
+
+    return Array.from(
+        document.querySelectorAll(".day-pill.selected")
+    ).map(d => d.dataset.d);
+}
+
+function autoSelectTodayCustomDay() {
+
+    // Switch frequency to "Custom Days"
+    document.querySelectorAll(".freq-opt").forEach(b => {
+
+        b.classList.toggle(
+            "active",
+            b.dataset.freq === "custom"
+        );
+    });
+
+    currentFreq = "custom";
+    document.getElementById("daysWrap").style.display = "";
+
+    // Today's short name
+    const todayName = [
+        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+    ][new Date().getDay()];
+
+    document.querySelectorAll(".day-pill").forEach(p => {
+
+        p.classList.toggle(
+            "selected",
+            p.dataset.d === todayName
+        );
+    });
+
+    addAutomationLog(
+        `📅 Custom Day → ${todayName} (today)`,
+        "info"
+    );
+}
+
+function autoSelectNowDateTime() {
+
+    const now = new Date();
+
+    const yyyy = now.getFullYear();
+    const mm   = String(now.getMonth() + 1).padStart(2, "0");
+    const dd   = String(now.getDate()).padStart(2, "0");
+
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mi = String(now.getMinutes()).padStart(2, "0");
+
+    document.getElementById("schStartDate").value = `${yyyy}-${mm}-${dd}`;
+    document.getElementById("schTime").value      = `${hh}:${mi}`;
+
+    addAutomationLog(
+        `⏰ Date ${yyyy}-${mm}-${dd}, Time ${hh}:${mi}`,
+        "info"
+    );
+}
+
 /* ============================================================
    FILE QUEUE RENDERING
 ============================================================ */
@@ -1293,6 +1904,325 @@ function renderSchedulerQueue() {
     });
 }
 
+/* ============================================================
+   GROQ CAPTION
+============================================================ */
+
+async function generateGroqCaption(post) {
+
+    try {
+
+        addAutomationLog(
+            `⚡ Generating caption with Groq for "${post.client}"…`,
+            "info"
+        );
+
+        post.status = "generating";
+        renderSchedulerQueue();
+
+        const response = await fetch("/generate-caption", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({
+                id:     post.id,
+                client: post.client,
+                prompt: post.prompt
+            })
+        });
+
+        const result = await response.json();
+
+        post.caption  = result.caption  || "";
+        post.hashtags = result.hashtags || "";
+        post.title    = post.title || (post.client + " — new post");
+        post.status   = "ready";
+
+        renderSchedulerQueue();
+
+        addAutomationLog(
+            "✅ Groq caption generated",
+            "ok"
+        );
+
+        return result;
+
+    } catch (error) {
+
+        console.log(error);
+
+        addAutomationLog(
+            "Groq error: " + error.message,
+            "err"
+        );
+
+        post.status = "failed";
+        renderSchedulerQueue();
+    }
+}
+
+async function manualGenerateAllCaptions() {
+
+    for (const post of schedulerQueue) {
+
+        if (post.status !== "ready") {
+
+            await generateGroqCaption(post);
+        }
+    }
+}
+
+/* ============================================================
+   PUBLISH TO META
+   Accepts an optional `targetPost` — if not given, defaults to the
+   first post in the scheduler queue (manual-button behaviour).
+============================================================ */
+
+const currentlyScheduling = new Set(); // post.id values being sent
+const fullyScheduled      = new Set(); // post.id values already done
+
+async function publishToMeta(targetPost) {
+
+    try {
+
+        const post = targetPost || schedulerQueue[0];
+
+        if (!post) {
+
+            addAutomationLog("No queued post found", "err");
+            return;
+        }
+
+        if (fullyScheduled.has(post.id)) {
+
+            addAutomationLog(
+                `⏭ Post for "${post.client}" was already scheduled — skipping.`,
+                "warn"
+            );
+            return;
+        }
+
+        if (currentlyScheduling.has(post.id)) {
+
+            addAutomationLog(
+                `⏳ Post for "${post.client}" is still being scheduled — skipping duplicate.`,
+                "warn"
+            );
+            return;
+        }
+
+        if (post.status !== "ready") {
+
+            addAutomationLog(
+                `Post for "${post.client}" not ready — generate caption first.`,
+                "warn"
+            );
+            return;
+        }
+
+        const targets = getSelectedTargets();
+
+        if (!targets.length) {
+
+            addAutomationLog(
+                "No targets selected — select FB / IG tiles.",
+                "err"
+            );
+            return;
+        }
+
+        // Build schedule time from date + time inputs
+        const dateVal = document.getElementById("schStartDate").value;
+        const timeVal = document.getElementById("schTime").value;
+
+        let scheduleTime;
+
+        if (dateVal && timeVal) {
+
+            scheduleTime = new Date(`${dateVal}T${timeVal}`);
+
+        } else {
+
+            scheduleTime = new Date();
+        }
+
+        // Facebook requires scheduled_publish_time to be ≥10 min in the
+        // future. Bump to 11 min if user picked "now" or a past time.
+        const minTime = new Date(Date.now() + 11 * 60 * 1000);
+
+        if (isNaN(scheduleTime.getTime()) || scheduleTime < minTime) {
+
+            scheduleTime = minTime;
+
+            addAutomationLog(
+                `⏰ Adjusted schedule time to ${scheduleTime.toLocaleString()} ` +
+                `(Facebook requires ≥10 min in the future)`,
+                "info"
+            );
+        }
+
+        currentlyScheduling.add(post.id);
+
+        addAutomationLog(
+            `🚀 Scheduling "${post.client}" → ${targets.length} target(s) @ ${scheduleTime.toLocaleString()}`,
+            "warn"
+        );
+
+        const response = await fetch("/schedule-post", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({
+                postId:       post.id,
+                scheduleTime: scheduleTime.toISOString(),
+                targets
+            })
+        });
+
+        const data = await response.json();
+
+        console.log("schedule response", data);
+
+        currentlyScheduling.delete(post.id);
+
+        if (data.success) {
+
+            fullyScheduled.add(post.id);
+
+            addAutomationLog(
+                `✅ Post scheduled successfully on Meta (${targets.length} target${targets.length>1?'s':''})`,
+                "ok"
+            );
+
+            // Remove this post from the queue so we don't double-schedule
+            schedulerQueue = schedulerQueue.filter(
+                p => p.id !== post.id
+            );
+
+            renderSchedulerQueue();
+
+            loadPosts();
+
+        } else {
+
+            addAutomationLog(
+                "Schedule failed: " +
+                (typeof data.error === "string"
+                    ? data.error
+                    : JSON.stringify(data.error)),
+                "err"
+            );
+        }
+
+    } catch (error) {
+
+        console.log(error);
+
+        addAutomationLog(
+            "Publish error: " + error.message,
+            "err"
+        );
+    }
+}
+
+/* ============================================================
+   AUTO PIPELINE
+   Triggered by SSE every time a new image is generated.
+   1. drop into upload queue
+   2. ⚡ generate-with-groq
+   3. select all FB+IG targets
+   4. custom days → today, current date + time
+   5. 🚀 schedule
+============================================================ */
+
+async function autoScheduleGeneratedPost(post) {
+
+    if (alreadyAutomated.has(post.id)) {
+
+        console.log("skipping already automated", post.id);
+        return;
+    }
+
+    alreadyAutomated.add(post.id);
+
+    try {
+
+        addAutomationLog(
+            `📥 New image from ChatGPT for "${post.client}"`,
+            "ok"
+        );
+
+        /* ---------- 1. Place in file queue ---------- */
+
+        post.title  = post.client + " — auto post";
+        post.status = "uploaded";
+
+        schedulerQueue.unshift(post);
+        renderSchedulerQueue();
+
+        addAutomationLog(
+            "📂 Image placed in upload queue",
+            "info"
+        );
+
+        /* ---------- 2. Generate caption with Groq ---------- */
+
+        await generateGroqCaption(post);
+
+        /* ---------- 3. Auto-select ONLY the matching client page ---------- */
+
+        if (!metaTargets.length) {
+
+            await loadMetaTargets();
+        }
+
+        const matchedPage = findPageForClient(post.client);
+
+        if (!matchedPage) {
+
+            addAutomationLog(
+                `⚠ No Meta page matches client "${post.client}". ` +
+                `Pages available: ${metaTargets.map(p=>p.pageName).join(", ")}`,
+                "err"
+            );
+
+            alreadyAutomated.delete(post.id);  // allow retry
+            return;
+        }
+
+        // Wipe previous selection, select ONLY this page
+        selectedTargets = new Set();
+        selectedTargets.add(matchedPage.pageId);
+
+        if (matchedPage.instagramId) {
+
+            selectedTargets.add(matchedPage.pageId + "_ig");
+        }
+
+        renderTargets();   // re-render tiles with correct .selected class
+
+        addAutomationLog(
+            `🎯 Selected page: "${matchedPage.pageName}"` +
+            (matchedPage.instagramId ? "  (FB + Instagram)" : "  (FB only — no IG linked)"),
+            "ok"
+        );
+
+        /* ---------- 4. Custom days → today + current date/time ---------- */
+
+        autoSelectTodayCustomDay();
+        autoSelectNowDateTime();
+
+        /* ---------- 5. Fire the schedule for THIS post specifically ---------- */
+
+        setTimeout(() => publishToMeta(post), 1500);
+
+    } catch (error) {
+
+        console.log(error);
+        addAutomationLog(
+            "Auto pipeline error: " + error.message,
+            "err"
+        );
+    }
+}
 
 /* ============================================================
    SSE STREAM
@@ -1348,30 +2278,67 @@ function connectSSE() {
             // The corresponding queued prompt was just marked done — refresh list
             refreshQueuedPrompts();
 
-            // Server is uploading this image to Drive (weekly batch). Nothing
-            // to do on the dashboard except refresh views.
-            if (post.weeklyBatch) {
+            // Server-owned pipeline (cron-queued image): skip dashboard auto-schedule
+            if (post.autoScheduled) {
                 addAutomationLog(
-                    `📷 New image: ${post.client} — uploading to Drive`,
+                    `📷 New image: ${post.client} — server is handling caption + scheduling`,
                     "info"
                 );
                 loadPosts();
-                refreshDriveAssets();
                 return;
             }
 
-            // Manual one-off post (no weekly context): just refresh the
-            // generated-posts list. No scheduling — MetaFlow handles that.
-            addAutomationLog(
-                `📷 New image saved: ${post.client}`,
-                "ok"
-            );
-            loadPosts();
+            // De-duplicate: dashboard may see the same post twice if SSE
+            // reconnects mid-flow. Track which post IDs we've already pushed.
+            if (!window.__scheduledPostIds) window.__scheduledPostIds = new Set();
+            if (window.__scheduledPostIds.has(post.id)) {
+                console.log("[dashboard] skipping duplicate new-post for id", post.id);
+                return;
+            }
+            window.__scheduledPostIds.add(post.id);
+
+            autoScheduleGeneratedPost(post);
 
         } catch (e) {
 
             console.log(e);
         }
+    });
+
+    es.addEventListener("post-scheduled", evt => {
+
+        const { postId } = JSON.parse(evt.data);
+
+        addAutomationLog(
+            `Server confirmed scheduling for post ${postId}`,
+            "ok"
+        );
+    });
+
+    /* ===== IG queue events ===== */
+
+    es.addEventListener("ig-published", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`✅ Instagram published — ${d.client} (${d.metaPostId})`, "ok");
+            refreshIgQueue();
+        } catch (_) {}
+    });
+
+    es.addEventListener("ig-failed", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`❌ Instagram publish failed — ${d.client}: ${d.error}`, "err");
+            refreshIgQueue();
+        } catch (_) {}
+    });
+
+    es.addEventListener("ig-canceled", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`✓ Instagram post canceled — ${d.client}`, "info");
+            refreshIgQueue();
+        } catch (_) {}
     });
 
     /* ===== Weekly batch events ===== */
@@ -1395,11 +2362,37 @@ function connectSSE() {
         } catch (_) {}
     });
 
-    es.addEventListener("weekly-regenerate-queued", evt => {
+    es.addEventListener("weekly-approved", evt => {
         try {
             const d = JSON.parse(evt.data);
-            addAutomationLog(`🔄 Regenerate queued for asset ${d.assetId}`, "info");
-            refreshDriveAssets();
+            addAutomationLog(`✓ Weekly approved: ${d.client} — ${d.scheduled} scheduled`, "ok");
+            refreshAllQueues();
+        } catch (_) {}
+    });
+
+    /* ===== FB queue events ===== */
+
+    es.addEventListener("fb-published", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`✅ Facebook published — ${d.client} (${d.metaPostId})`, "ok");
+            refreshFbQueue();
+        } catch (_) {}
+    });
+
+    es.addEventListener("fb-failed", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`❌ Facebook publish failed — ${d.client}: ${d.error}`, "err");
+            refreshFbQueue();
+        } catch (_) {}
+    });
+
+    es.addEventListener("fb-canceled", evt => {
+        try {
+            const d = JSON.parse(evt.data);
+            addAutomationLog(`✓ Facebook post canceled — ${d.client}`, "info");
+            refreshFbQueue();
         } catch (_) {}
     });
 
@@ -1502,12 +2495,47 @@ async function loadPosts() {
             const card = document.createElement("div");
             card.className = "card";
 
+            const isScheduled = post.scheduled === true || post.status === "scheduled";
+
+            const scheduledLine = isScheduled && post.scheduleTime
+                ? `<p class="status-line scheduled" style="font-size:11px; color:#7eaaff;">
+                     📅 Scheduled for ${new Date(post.scheduleTime).toLocaleString()}
+                   </p>`
+                : '';
+
+            const buttonLabel = isScheduled
+                ? "🔄 Re-Schedule"
+                : "Schedule Manually";
+
+            const buttonStyle = isScheduled
+                ? 'style="background:#1d2435; border:1px solid #2c3a52; color:#aac;"'
+                : '';
+
+            const onclickCall = isScheduled
+                ? `confirmReschedule(${post.id})`
+                : `schedulePost(${post.id})`;
+
             card.innerHTML = `
               <img src="${escapeHTML(post.image)}">
               <h2>${escapeHTML(post.client || "—")}</h2>
               <p>${escapeHTML(post.caption || "")}</p>
               <p>${escapeHTML(post.hashtags || "")}</p>
               <p class="status-line ${post.status}">${post.status}</p>
+              ${scheduledLine}
+              <div class="schedule-box">
+                <input
+                type="datetime-local"
+                id="time-${post.id}"
+                class="schedule-input"
+                >
+                <button
+                class="schedule-btn"
+                ${buttonStyle}
+                onclick="${onclickCall}"
+                >
+                  ${buttonLabel}
+                </button>
+              </div>
             `;
 
             grid.appendChild(card);
@@ -1518,6 +2546,72 @@ async function loadPosts() {
         console.log(e);
     }
 }
+
+async function schedulePost(id) {
+
+    const timeInput = document.getElementById(`time-${id}`);
+    if (!timeInput) return alert("Time input missing");
+
+    const time = timeInput.value;
+    if (!time) return alert("Pick a schedule time first");
+
+    const targets = getSelectedTargets();
+
+    const res = await fetch("/schedule-post", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+            postId:       id,
+            scheduleTime: new Date(time).toISOString(),
+            targets
+        })
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+
+        alert("Post scheduled ✓");
+        loadPosts();
+        refreshAllQueues();
+
+    } else {
+
+        alert(
+            "Failed: " +
+            (typeof data.error === "string"
+                ? data.error
+                : JSON.stringify(data.error))
+        );
+    }
+}
+
+/* Wrapper for re-scheduling an already-scheduled post.
+   Confirms with the user first since this cancels existing queue jobs. */
+
+function confirmReschedule(id) {
+
+    const timeInput = document.getElementById(`time-${id}`);
+    if (!timeInput || !timeInput.value) {
+        return alert("Pick a new schedule time first");
+    }
+
+    const newTime = new Date(timeInput.value).toLocaleString();
+
+    const ok = confirm(
+        `Re-schedule this post for ${newTime}?\n\n` +
+        `Any pending FB / Instagram queued jobs for this post will be canceled ` +
+        `and replaced with new ones at the new time.`
+    );
+
+    if (!ok) return;
+
+    schedulePost(id);
+}
+
+/* ============================================================
+   INIT
+============================================================ */
 
 /* ============================================================
    QUEUED PROMPTS — what Tampermonkey will pick up next
@@ -1637,6 +2731,60 @@ async function clearAllPrompts() {
 }
 
 /* ============================================================
+   META TOKEN HELPERS
+============================================================ */
+
+async function fetchMetaPages() {
+
+    const input = document.getElementById("metaTokenInput");
+    const status = document.getElementById("metaPagesStatus");
+    const token = (input?.value || "").trim();
+
+    if (!token) {
+        status.innerHTML = '<span style="color:#ff9999;">Please paste a token first.</span>';
+        return;
+    }
+
+    status.innerHTML = '⏳ Fetching pages from Meta…';
+
+    try {
+
+        const r = await fetch("/meta/refresh-pages", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ token })
+        });
+
+        const d = await r.json();
+
+        if (d.success) {
+
+            status.innerHTML =
+                `<span style="color:#7eff7e;">✅ ${d.count} pages linked` +
+                (d.tokenSaved ? " · token saved" : "") +
+                "</span>";
+
+            input.value = "";  // hide token after success
+            addAutomationLog(`✅ Meta: ${d.count} pages fetched and saved`, "ok");
+            loadMetaTargets();
+
+        } else {
+
+            const msg = d.error || "Unknown error";
+            const hint = d.hint ? ` — ${d.hint}` : "";
+            status.innerHTML =
+                `<span style="color:#ff9999;">❌ ${escapeHTML(msg)}${escapeHTML(hint)}</span>`;
+            addAutomationLog(`❌ Meta fetch failed: ${msg}`, "err");
+        }
+
+    } catch (e) {
+
+        status.innerHTML =
+            `<span style="color:#ff9999;">❌ Network error: ${escapeHTML(e.message)}</span>`;
+    }
+}
+
+/* ============================================================
    LOG PERSISTENCE
 ============================================================ */
 
@@ -1695,13 +2843,18 @@ async function clearLogs() {
     setAutoStatus("Connecting to automation stream…", true);
 
     await loadClients();
+    await loadMetaTargets();
     await loadPersistedLogs();
     await refreshQueuedPrompts();
 
+    autoSelectNowDateTime();
+    autoSelectTodayCustomDay();
+
     loadPosts();
+    refreshAllQueues();
     refreshGsaStatus();
     setInterval(loadPosts, 8000);
-    setInterval(refreshQueuedPrompts, 10000);
+    setInterval(refreshQueuedPrompts, 10000); // refresh queued list every 10s
 
     connectSSE();
 })();

@@ -37,6 +37,74 @@ content="width=device-width, initial-scale=1.0"
     </div>
 
     <!-- =========================
+         MORNING BUTTON
+    ========================== -->
+
+    <div class="section morning-section">
+
+        <h2>🌅 Morning Run</h2>
+
+        <p class="subtext">
+            Runs the full pipeline (generate image → caption → schedule to FB &amp; Instagram)
+            for every client that has a saved calendar. Same thing the
+            <strong>9:00 AM IST daily cron</strong> does — but on demand.
+        </p>
+
+        <button
+        class="publish-btn"
+        id="runAllBtn"
+        onclick="generateForAllClients()"
+        >
+            🌅 Generate &amp; Schedule for ALL Clients
+        </button>
+
+    </div>
+
+    <!-- =========================
+         META TOKEN & PAGES
+    ========================== -->
+
+    <div class="section morning-section" id="metaTokenSection">
+
+        <h2>🔑 Meta Access Token</h2>
+
+        <p class="subtext">
+            Paste your User Access Token from Graph API Explorer.
+            Required permissions: <code>pages_show_list</code>,
+            <code>pages_manage_posts</code>, <code>pages_read_engagement</code>,
+            <code>instagram_basic</code>, <code>instagram_content_publish</code>,
+            <code>business_management</code>.
+        </p>
+
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+
+            <input
+                id="metaTokenInput"
+                type="password"
+                placeholder="EAAB...your access token..."
+                style="flex:1; min-width:280px; padding:10px 12px;
+                       background:#1a1a1a; border:1px solid #333;
+                       border-radius:6px; color:#fff; font-family:monospace;"
+            >
+
+            <button class="main-btn" onclick="fetchMetaPages()">
+                ⚡ Fetch All My Pages
+            </button>
+
+            <a href="https://developers.facebook.com/tools/explorer/"
+               target="_blank" rel="noopener"
+               style="padding:10px 12px; background:#222; border:1px solid #333;
+                      border-radius:6px; color:#9fa9ff; text-decoration:none;">
+                Open Graph API Explorer ↗
+            </a>
+
+        </div>
+
+        <div id="metaPagesStatus" class="subtext" style="margin-top:10px;"></div>
+
+    </div>
+
+    <!-- =========================
          CREATE CLIENT
     ========================== -->
 
@@ -215,6 +283,33 @@ content="width=device-width, initial-scale=1.0"
             </label>
         </div>
 
+        <!-- STORY + SONG CONFIG -->
+        <div style="margin-top:14px; background:#161616; border:1px solid #2a2a2a; border-radius:8px; padding:14px;">
+            <div style="font-size:13px; font-weight:600; margin-bottom:8px;">🎵 Instagram Story (optional)</div>
+            <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-size:13px; margin-bottom:10px;">
+                <input type="checkbox" id="storyEnabled" style="width:16px; height:16px; cursor:pointer;" onchange="toggleStoryPanel()">
+                <span>
+                    Also post a Story when this client's post publishes
+                    <span style="color:#888; font-size:11px;">(uses the same image; audio baked in if a song is set)</span>
+                </span>
+            </label>
+            <div id="songPanel" style="display:none;">
+                <label style="font-size:12px; color:#888; display:block; margin-bottom:4px;">
+                    🎶 Background Song <span style="color:#666;">(mp3 file, max ~30 MB)</span>
+                </label>
+                <input
+                    type="file"
+                    id="songFile"
+                    accept="audio/mp3,audio/mpeg,audio/wav,audio/m4a"
+                    onchange="onSongChosen(this)"
+                    style="width:100%; font-size:12px; color:#aaa;">
+                <div id="songPreview"
+                    style="margin-top:8px; padding:8px; background:#0e0e0e; border-radius:6px; min-height:32px; font-size:12px; color:#888;">
+                    No song set
+                </div>
+            </div>
+        </div>
+
         <p class="subtext" style="margin-top:10px;">
             Files upload to Cloudinary when you save. The resulting URLs are sent to
             ChatGPT with every prompt so the generated image incorporates them.
@@ -353,22 +448,25 @@ content="width=device-width, initial-scale=1.0"
         </h2>
 
         <p class="subtext" style="margin-bottom:10px;">
-            <strong>Step 1:</strong> click <em>Generate Week</em> to build this week's posts for the selected client.
-            The dashboard queues a Tampermonkey prompt per posting day (3 for MWF, 6 for Mon→Sat, 7 for Daily).
+            <strong>Step 1:</strong> click <em>Generate Week</em> to build the next 7 posting days for the selected client.
+            Tampermonkey creates the images and uploads them to the client's Drive folder.
             <br>
-            <strong>Step 2:</strong> as each image generates, it's uploaded to the client's Drive folder
-            (filename = topic). Caption + hashtags are saved in the file's Drive description.
+            <strong>Step 2:</strong> review the Drive folder — delete bad files, drop in replacements
+            (the filename becomes the post topic).
             <br>
-            <strong>Step 3:</strong> click <em>🔄 Regenerate</em> on any image you don't like — it queues a fresh
-            generation and replaces the file in Drive when done.
-            <br>
-            <strong>Step 4:</strong> open the Drive folder and review. MetaFlow (separate tool) picks up
-            from here for scheduling to Facebook + Instagram.
+            <strong>Step 3:</strong> click <em>Approve & Schedule</em> — the server reads the live
+            Drive state and pushes everything to the FB + Instagram queues.
         </p>
 
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
             <button onclick="generateWeekForClient()" class="main-btn">
                 ▶ Generate Week
+            </button>
+            <button onclick="approveWeekForClient()"
+                style="padding:9px 16px; background:#0e3a1f; border:1px solid #1a6437;
+                       color:#a4f0bd; border-radius:6px; cursor:pointer;
+                       font-weight:600; font-size:14px;">
+                ✓ Approve & Schedule
             </button>
             <button onclick="openDriveFolder()"
                 style="padding:9px 16px; background:#1d2435; border:1px solid #2c3a52;
@@ -379,6 +477,53 @@ content="width=device-width, initial-scale=1.0"
         </div>
 
         <div id="driveAssetsList"></div>
+
+    </div>
+
+    <!-- =========================
+         PUBLISH QUEUES (FB + IG)
+    ========================== -->
+
+    <div class="section">
+
+        <h2 style="display:flex; justify-content:space-between; align-items:center;">
+            <span>📅 Publish Queue</span>
+            <span style="font-size:13px; color:#888; font-weight:normal;">
+                <button onclick="refreshAllQueues()"
+                    style="font-size:12px; padding:5px 11px;
+                           background:#1d2435; border:1px solid #2c3a52;
+                           color:#aac; border-radius:5px; cursor:pointer;">
+                    ↺ Refresh
+                </button>
+            </span>
+        </h2>
+
+        <p class="subtext" style="margin-bottom:10px;">
+            Posts are held by the server until their scheduled time, then published via the Meta Graph API.
+            Click 🗑 to cancel a queued post.
+        </p>
+
+        <!-- Tabs -->
+        <div style="display:flex; gap:6px; margin-bottom:12px; border-bottom:1px solid #2a2a2a; padding-bottom:0;">
+            <button id="qTab_fb"
+                onclick="switchQueueTab('fb')"
+                style="background:#0f1a2e; border:1px solid #1d3654; border-bottom:none;
+                       color:#7eaaff; padding:8px 16px; border-radius:6px 6px 0 0;
+                       cursor:pointer; font-weight:600; font-size:13px;
+                       position:relative; top:1px;">
+                📘 Facebook (<span id="fbQueueCount">0</span>)
+            </button>
+            <button id="qTab_ig"
+                onclick="switchQueueTab('ig')"
+                style="background:#161616; border:1px solid #2a2a2a; border-bottom:1px solid #2a2a2a;
+                       color:#888; padding:8px 16px; border-radius:6px 6px 0 0;
+                       cursor:pointer; font-weight:600; font-size:13px;">
+                📸 Instagram (<span id="igQueueCount">0</span>)
+            </button>
+        </div>
+
+        <div id="fbQueueList"></div>
+        <div id="igQueueList" style="display:none;"></div>
 
     </div>
 
@@ -402,6 +547,114 @@ content="width=device-width, initial-scale=1.0"
                 No generated images yet
             </div>
         </div>
+
+        <button
+        id="generateGroqBtn"
+        class="main-btn groq-btn"
+        onclick="manualGenerateAllCaptions()"
+        >
+            ⚡ Generate with Groq
+        </button>
+
+    </div>
+
+    <!-- =========================
+         TARGETS  (Step 1)
+    ========================== -->
+
+    <div class="section">
+
+        <h2>
+            Select Posting Targets
+        </h2>
+
+        <p class="subtext" id="targetsHelp">
+            Loading pages from Meta…
+        </p>
+
+        <div class="targets-grid" id="targetsGrid"></div>
+
+    </div>
+
+    <!-- =========================
+         SCHEDULER  (Step 2)
+    ========================== -->
+
+    <div class="section">
+
+        <h2>
+            Posting Frequency
+        </h2>
+
+        <div class="freq-wrap">
+
+            <button
+            class="freq-opt"
+            data-freq="daily"
+            onclick="selectFreq(this)"
+            >
+                Daily
+            </button>
+
+            <button
+            class="freq-opt"
+            data-freq="weekly"
+            onclick="selectFreq(this)"
+            >
+                Weekly
+            </button>
+
+            <button
+            class="freq-opt active"
+            data-freq="custom"
+            onclick="selectFreq(this)"
+            >
+                Custom Days
+            </button>
+
+        </div>
+
+        <div class="days-wrap" id="daysWrap">
+
+            <div class="day-pill" data-d="Mon" onclick="toggleDay(this)">Mon</div>
+            <div class="day-pill" data-d="Tue" onclick="toggleDay(this)">Tue</div>
+            <div class="day-pill" data-d="Wed" onclick="toggleDay(this)">Wed</div>
+            <div class="day-pill" data-d="Thu" onclick="toggleDay(this)">Thu</div>
+            <div class="day-pill" data-d="Fri" onclick="toggleDay(this)">Fri</div>
+            <div class="day-pill" data-d="Sat" onclick="toggleDay(this)">Sat</div>
+            <div class="day-pill" data-d="Sun" onclick="toggleDay(this)">Sun</div>
+
+        </div>
+
+        <div class="schedule-grid">
+
+            <div>
+                <label>Start Date</label>
+                <input
+                type="date"
+                id="schStartDate"
+                class="schedule-input"
+                >
+            </div>
+
+            <div>
+                <label>Posting Time</label>
+                <input
+                type="time"
+                id="schTime"
+                class="schedule-input"
+                >
+            </div>
+
+        </div>
+
+        <button
+        class="publish-btn"
+        id="publishBtn"
+        onclick="publishToMeta()"
+        >
+            🚀 Schedule All Posts to Meta
+        </button>
 
     </div>
 
@@ -484,8 +737,7 @@ content="width=device-width, initial-scale=1.0"
 
         <p class="subtext" style="margin-bottom:10px;">
             Pick a client in the <strong>Content Calendar</strong> section above to filter posts.
-            This is the raw history of every image generated through ChatGPT — including manual one-offs
-            and weekly batches.
+            Generated posts that have not yet been scheduled to publish appear here.
         </p>
 
         <div id="posts"></div>

@@ -10,8 +10,16 @@ const { connect } = require("./db/connect");
 
 const {
     Client, Prompt, Post, Scheduled, Calendar,
-    Session, MetaPage, RunLog, Log, DriveAsset
+    Session, MetaPage, RunLog, Log
 } = require("./db/models");
+
+const {
+    refreshMetaPages,
+    getAllMetaPages,
+    findPageForClient,
+    scheduleOnePost,
+    persistScheduleAttempt
+} = require("./lib/meta");
 
 const dailyCron      = require("./lib/dailyCron");
 const puppeteerCG    = require("./lib/puppeteerChatGPT");
@@ -264,14 +272,15 @@ app.get("/prompts/queued", requireMongo, async (req, res) => {
 
         res.json(items.map(p => {
 
-            let weeklyInfo = null;
+            let cronInfo = null;
             if (p.error) {
                 try {
                     const parsed = JSON.parse(p.error);
-                    if (parsed.weeklyContext) {
-                        weeklyInfo = {
-                            topic: parsed.weeklyContext.topic,
-                            date:  parsed.weeklyContext.calendarDate
+                    if (parsed.cronContext) {
+                        cronInfo = {
+                            page:  parsed.cronContext.pageName,
+                            topic: parsed.cronContext.itemTopic,
+                            date:  parsed.cronContext.itemDate
                         };
                     }
                 } catch (_) {}
@@ -285,7 +294,7 @@ app.get("/prompts/queued", requireMongo, async (req, res) => {
                 attempts:  p.attempts || 0,
                 claimedAt: p.claimedAt,
                 createdAt: p.createdAt,
-                weeklyInfo
+                cronInfo
             };
         }));
 
@@ -448,18 +457,26 @@ async function handleSavePost(req, res) {
             source:       source || "tampermonkey"
         });
 
-        /* ---------- Mark Prompt as done + capture weekly context ---------- */
+        /* ---------- Mark Prompt as done + capture cron context ---------- */
+
+        // Find a matching un-generated prompt and pull its cronContext (if any)
+        // BEFORE marking it generated, so we know whether the cron triggered it.
 
         const queuedPrompt = await Prompt.findOne({
             client, prompt, generated: false
         }).lean();
 
-        let weeklyContext = null;
+        let cronContext    = null;
+        let weeklyContext  = null;
 
         if (queuedPrompt?.error) {
+
             try {
+
                 const parsed = JSON.parse(queuedPrompt.error);
+                cronContext   = parsed.cronContext   || null;
                 weeklyContext = parsed.weeklyContext || null;
+
             } catch (_) {}
         }
 
@@ -473,15 +490,16 @@ async function handleSavePost(req, res) {
         );
 
         const payload = {
-            id:          post._legacyId,
-            client:      post.client,
-            prompt:      post.prompt,
-            image:       post.image,
-            caption:     post.caption,
-            hashtags:    post.hashtags,
-            status:      post.status,
-            createdAt:   post.createdAt,
-            weeklyBatch: !!weeklyContext
+            id:            post._legacyId,
+            client:        post.client,
+            prompt:        post.prompt,
+            image:         post.image,
+            caption:       post.caption,
+            hashtags:      post.hashtags,
+            status:        post.status,
+            createdAt:     post.createdAt,
+            autoScheduled: !!cronContext,
+            weeklyBatch:   !!weeklyContext
         };
 
         broadcast("new-post", payload);
@@ -536,7 +554,32 @@ async function handleSavePost(req, res) {
             return res.json({ success: true, post: payload });
         }
 
-        /* Manual save (no weeklyContext) — image is just stored. */
+        /* ---------- Cron-triggered? Auto-caption + auto-schedule ---------- */
+
+        if (cronContext) {
+
+            console.log(
+                `🤖 Image came from cron-queued prompt — auto-running ` +
+                `caption + Meta scheduling for ${client}…`
+            );
+
+            (async () => {
+
+                try {
+
+                    await autoCaptionAndSchedule(post, cronContext);
+
+                } catch (e) {
+
+                    console.log("auto-pipeline error:", e.message);
+                    broadcast("pipeline-done", {
+                        client,
+                        status: "failed",
+                        reason: "Auto caption/schedule failed: " + e.message
+                    });
+                }
+            })();
+        }
 
         res.json({ success: true, post: payload });
 
@@ -544,6 +587,135 @@ async function handleSavePost(req, res) {
 
         console.log(err);
         res.json({ success: false, error: err.message });
+    }
+}
+
+/* ============================================================
+   Auto-pipeline: when Tampermonkey delivers a cron-queued image,
+   complete the rest of the cron job (caption + Meta scheduling).
+============================================================ */
+
+/* Module-level dedup: once a post has been auto-scheduled we never do it again */
+const autoScheduledPostIds = new Set();
+
+async function autoCaptionAndSchedule(post, ctx) {
+
+    const postKey = String(post._legacyId || post._id);
+
+    if (autoScheduledPostIds.has(postKey)) {
+        console.log(`⏭ autoCaptionAndSchedule: already done for post ${postKey}`);
+        return;
+    }
+
+    autoScheduledPostIds.add(postKey);
+
+    // Also guard against double-firing across server restarts:
+    // if the Post already has status "scheduled", bail.
+    if (post.scheduled || post.status === "scheduled") {
+        console.log(`⏭ autoCaptionAndSchedule: post ${postKey} already scheduled`);
+        return;
+    }
+
+    /* 1. Get the client details */
+
+    const client = await Client.findOne({ name: post.client }).lean();
+
+    if (!client) {
+
+        broadcast("pipeline-done", {
+            client: post.client,
+            status: "failed",
+            reason: "Client not found in DB after image arrived."
+        });
+        return;
+    }
+
+    /* 2. Generate caption */
+
+    let caption = "", hashtags = "";
+
+    try {
+
+        const cap = await dailyCron.buildCaption(
+            client,
+            { date: ctx.itemDate, topic: ctx.itemTopic },
+            post.prompt
+        );
+
+        caption  = cap.caption  || "";
+        hashtags = cap.hashtags || "";
+
+        post.caption  = caption;
+        post.hashtags = hashtags;
+        await post.save();
+
+    } catch (e) {
+
+        console.log("caption generation failed:", e.message);
+    }
+
+    /* 3. Schedule to Meta */
+
+    const target = {
+        pageId:          ctx.pageId,
+        pageName:        ctx.pageName,
+        pageAccessToken: ctx.pageAccessToken,
+        instagramId:     ctx.instagramId
+    };
+
+    const unixTime = Math.floor((Date.now() + 11 * 60 * 1000) / 1000);
+
+    const result = await scheduleOnePost(post, target, unixTime);
+
+    await persistScheduleAttempt(post, target, result, unixTime);
+
+    if (result.fb || result.ig) {
+
+        post.status       = "scheduled";
+        post.scheduled    = true;
+        post.scheduleTime = new Date(unixTime * 1000).toISOString();
+        await post.save();
+
+        /* Mark calendar item as done */
+
+        const cal = await Calendar.findOne({ client: client.name });
+
+        if (cal?.calendar?.length) {
+
+            const item = cal.calendar.find(x =>
+                x.topic === ctx.itemTopic &&
+                (x.date || "").slice(0, 10) === (ctx.itemDate || "").slice(0, 10)
+            );
+
+            if (item) {
+                item.done = true;
+                cal.markModified("calendar");
+                await cal.save();
+            }
+        }
+
+        broadcast("pipeline-done", {
+            client:      client.name,
+            status:      "scheduled",
+            page:        ctx.pageName,
+            imageSource: "tampermonkey",
+            fb:          result.fb,
+            ig:          result.ig
+        });
+
+        console.log(
+            `✅ ${client.name}: scheduled → ${ctx.pageName} [via tampermonkey]`
+        );
+
+    } else {
+
+        broadcast("pipeline-done", {
+            client:      client.name,
+            status:      "failed",
+            page:        ctx.pageName,
+            imageSource: "tampermonkey",
+            errors:      result.errors
+        });
     }
 }
 
@@ -707,6 +879,7 @@ app.post("/save-client", requireMongo, async (req, res) => {
 
         // Only overwrite booleans if the caller actually sent them
         if (typeof b.contactInCaption === "boolean") fields.contactInCaption = b.contactInCaption;
+        if (typeof b.storyEnabled     === "boolean") fields.storyEnabled     = b.storyEnabled;
 
         /* Logo */
 
@@ -772,10 +945,37 @@ app.post("/save-client", requireMongo, async (req, res) => {
             fields.samplePosts = b.samplePostsUrls.filter(Boolean);
         }
 
+        /* Song (audio file for stories) — also saves the Cloudinary
+           public_id so we can reference it in l_video overlay later. */
+
+        if (b.songDataUrl) {
+
+            try {
+                const u = await uploadDataUrl(b.songDataUrl, "song");
+                if (u) {
+                    fields.songUrl      = u.secure_url;
+                    fields.songPublicId = u.public_id;
+                }
+            } catch (e) {
+                return res.status(400).json({
+                    success: false,
+                    error:   "Song upload failed: " + e.message
+                });
+            }
+
+        } else if (typeof b.songUrl === "string") {
+
+            fields.songUrl = b.songUrl.trim();
+        }
+
         /* Special clears */
 
         if (b.logoUrl === "__REMOVE__")    fields.logoUrl   = "";
         if (b.footerUrl === "__REMOVE__")  fields.footerUrl = "";
+        if (b.songUrl === "__REMOVE__") {
+            fields.songUrl      = "";
+            fields.songPublicId = "";
+        }
         if (b.samplePosts === "__REMOVE_SAMPLES__") fields.samplePosts = [];
 
         /* ---------- Upsert ---------- */
@@ -1315,8 +1515,82 @@ Return a highly detailed visual prompt for an AI image generator.
 });
 
 /* ============================================================
-   /meta/delete-pages — legacy cleanup endpoint (clears any stored
-   MetaPage records left over from before MetaFlow took over).
+   META PAGES — used by dashboard target tiles
+============================================================ */
+
+app.get("/meta/pages", requireMongo, async (req, res) => {
+
+    try {
+
+        const pages = await getAllMetaPages();
+
+        // Also try a fresh fetch when cache is empty so we can surface
+        // the real underlying error (expired token, etc.)
+        if (!pages.length) {
+
+            try {
+
+                const fresh = await refreshMetaPages();
+                return res.json(fresh);
+
+            } catch (refreshErr) {
+
+                const m = refreshErr.response?.data?.error?.message ||
+                          refreshErr.message;
+
+                return res.json({
+                    error: `META_ACCESS_TOKEN failed: ${m}. ` +
+                           `Refresh it from Graph API Explorer.`,
+                    pages: []
+                });
+            }
+        }
+
+        res.json(pages);
+
+    } catch (err) {
+
+        console.log("/meta/pages error:", err.message);
+        res.json({ error: err.message, pages: [] });
+    }
+});
+
+app.post("/meta/refresh-pages", requireMongo, async (req, res) => {
+
+    try {
+
+        // Accept a fresh token from the dashboard
+        const token = (req.body && req.body.token) ? String(req.body.token).trim() : null;
+
+        const pages = await refreshMetaPages(token);
+
+        res.json({
+            success: true,
+            count:   pages.length,
+            tokenSaved: !!token
+        });
+
+    } catch (err) {
+
+        const msg = err.response?.data?.error?.message ||
+                    err.response?.data?.error_description ||
+                    err.message;
+
+        const code = err.response?.data?.error?.code;
+
+        res.status(400).json({
+            success: false,
+            error:   msg,
+            code,
+            hint:    code === 190 || /OAuth|expired|invalid/i.test(msg)
+                       ? "Token is invalid or expired. Get a fresh one from Graph API Explorer."
+                       : null
+        });
+    }
+});
+
+/* ============================================================
+   /meta/delete-pages — clear all stored pages
 ============================================================ */
 
 app.post("/meta/delete-pages", requireMongo, async (req, res) => {
@@ -1367,16 +1641,165 @@ app.get("/scheduled", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   SCHEDULE-POST — REMOVED. Scheduling is now handled by MetaFlow
-   reading from each client's Drive folder. This endpoint stays
-   as a clear 410 Gone so any stale UI calls get an obvious error.
+   SCHEDULE-POST — main dashboard endpoint
 ============================================================ */
 
+const inFlightPosts = new Set();
+
 app.post("/schedule-post", requireMongo, async (req, res) => {
-    res.status(410).json({
-        success: false,
-        error:   "Scheduling has moved to MetaFlow. This dashboard now only generates images and uploads them to each client's Drive folder."
-    });
+
+    try {
+
+        let { postId, scheduleTime, targets } = req.body;
+
+        console.log("\n📅 /schedule-post —", { postId, scheduleTime });
+
+        if (!postId)       return res.json({ success: false, error: "postId required" });
+        if (!scheduleTime) scheduleTime = new Date(Date.now() + 11 * 60 * 1000);
+
+        if (inFlightPosts.has(String(postId))) {
+
+            return res.json({
+                success: false,
+                error:   "Already scheduling this post — wait for it to finish."
+            });
+        }
+
+        const post = await Post.findOne({ _legacyId: postId });
+
+        if (!post)        return res.json({ success: false, error: "Post not found" });
+        if (!post.image)  return res.json({ success: false, error: "Post has no image" });
+
+        /* If the post is already scheduled, cancel its existing queue
+           jobs so we don't double-publish. Then proceed with the new
+           schedule. The dashboard treats this as a re-schedule. */
+
+        if (post.scheduled === true) {
+
+            try {
+
+                const { FbQueue, IgQueue } = require("./db/models");
+                const fbQueue = require("./lib/fbQueue");
+                const igQueue = require("./lib/igQueue");
+
+                const fbJobs = await FbQueue.find({
+                    postId,
+                    status: { $in: ["pending", "processing"] }
+                }).lean();
+
+                const igJobs = await IgQueue.find({
+                    postId,
+                    status: { $in: ["pending", "processing"] }
+                }).lean();
+
+                for (const j of fbJobs) await fbQueue.cancel(j.jobId);
+                for (const j of igJobs) await igQueue.cancel(j.jobId);
+
+                console.log(
+                    `Re-scheduling post ${postId}: canceled ` +
+                    `${fbJobs.length} FB + ${igJobs.length} IG queue job(s)`
+                );
+
+                broadcast("log", {
+                    level: "info",
+                    msg: `Re-scheduling post ${postId} — canceled ${fbJobs.length} FB + ${igJobs.length} IG queued job(s)`
+                });
+
+            } catch (e) {
+                console.log("Could not cancel old queue jobs:", e.message);
+                // continue anyway — better to potentially double-post than block forever
+            }
+        }
+
+        inFlightPosts.add(String(postId));
+
+        /* ---------- Resolve targets ---------- */
+
+        let realTargets = [];
+
+        if (Array.isArray(targets) && targets.length) {
+
+            const isStringForm = targets.every(t => typeof t === "string");
+
+            if (isStringForm) {
+
+                const pages = await getAllMetaPages();
+                realTargets = pages;
+                // dashboard tile-string form would only happen for unscoped tests
+
+            } else {
+
+                realTargets = targets.filter(t =>
+                    t && t.pageAccessToken && (t.pageId || t.instagramId)
+                );
+            }
+        }
+
+        if (!realTargets.length) {
+
+            inFlightPosts.delete(String(postId));
+
+            return res.json({
+                success: false,
+                error: "No valid targets provided. Tick a page tile and retry."
+            });
+        }
+
+        console.log(
+            "Resolved targets:",
+            realTargets.map(t => t.pageName)
+        );
+
+        /* ---------- Calculate schedule unix ---------- */
+
+        const minSchedule = Math.floor((Date.now() + 11 * 60 * 1000) / 1000);
+
+        let unixTime = Math.floor(new Date(scheduleTime).getTime() / 1000);
+
+        if (!unixTime || isNaN(unixTime) || unixTime < minSchedule) {
+
+            unixTime = minSchedule;
+        }
+
+        /* ---------- Loop ---------- */
+
+        const results = [];
+
+        for (const target of realTargets) {
+
+            const result = await scheduleOnePost(post, target, unixTime);
+            results.push(result);
+            await persistScheduleAttempt(post, target, result, unixTime);
+        }
+
+        post.status       = "scheduled";
+        post.scheduled    = true;
+        post.scheduleTime = new Date(unixTime * 1000).toISOString();
+        await post.save();
+
+        broadcast("post-scheduled", { postId, results });
+
+        inFlightPosts.delete(String(postId));
+
+        const anyOK = results.some(r => r.fb || r.ig);
+
+        res.json({
+            success: anyOK,
+            results,
+            error: anyOK ? null : results.map(r => r.errors.join(" | ")).join(" || ")
+        });
+
+    } catch (error) {
+
+        try { inFlightPosts.delete(String(req.body?.postId)); } catch (_) {}
+
+        console.log("/schedule-post fatal:", error.response?.data || error.message);
+
+        res.json({
+            success: false,
+            error:   error.response?.data || error.message
+        });
+    }
 });
 
 /* ============================================================
@@ -1474,30 +1897,153 @@ app.get("/chatgpt/status", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   Deprecated endpoints. Image generation now happens via the
-   weekly batch flow (`POST /weekly-gen/:client`); scheduling
-   happens in MetaFlow.
+   MANUAL CRON TRIGGER  — useful for testing
 ============================================================ */
 
-app.post("/cron/run-now", requireAdmin, (req, res) => {
-    res.status(410).json({
-        success: false,
-        error: "Daily cron is deprecated. Use POST /weekly-gen/:client to start the weekly image batch."
-    });
+app.post("/cron/run-now", requireAdmin, async (req, res) => {
+
+    res.json({ success: true, message: "Started in background." });
+
+    dailyCron.runDailyJob().catch(e => console.log("manual cron fail:", e));
 });
 
-app.post("/generate-and-schedule", requireMongo, (req, res) => {
-    res.status(410).json({
-        success: false,
-        error: "/generate-and-schedule is deprecated. Use POST /weekly-gen/:client to generate a week's worth of images for one client."
-    });
+/* ============================================================
+   /generate-and-schedule  — THE FULL PIPELINE IN ONE CALL.
+
+   Used by:
+     - The dashboard "Generate Creative" button on any calendar
+       item
+     - The "🌅 Generate & Schedule for ALL Clients" button
+     - The daily 9 AM IST cron (via dailyCron.runForClient)
+
+   Body: { clientName, item? }
+     - If `item` is missing, the next undone calendar item for
+       the client is used (same logic as the cron).
+
+   Returns: full run log so the dashboard can show what
+   happened (image URL, scheduled status, errors, etc.)
+============================================================ */
+
+const runningJobs = new Set(); // clientName values being processed
+
+app.post("/generate-and-schedule", requireMongo, async (req, res) => {
+
+    const { clientName, item } = req.body || {};
+
+    if (!clientName) {
+
+        return res.json({ success: false, error: "clientName required" });
+    }
+
+    if (runningJobs.has(clientName)) {
+
+        return res.json({
+            success: false,
+            error:   "Already running a job for this client — wait for it to finish."
+        });
+    }
+
+    runningJobs.add(clientName);
+
+    try {
+
+        const client = await Client.findOne({ name: clientName }).lean();
+
+        if (!client) {
+
+            return res.json({
+                success: false,
+                error: `Client "${clientName}" not found.`
+            });
+        }
+
+        const pages = await getAllMetaPages();
+
+        if (!pages.length) {
+
+            return res.json({
+                success: false,
+                error:
+                    "No Meta pages available. Check META_ACCESS_TOKEN " +
+                    "(it may have expired — refresh from Graph API Explorer)."
+            });
+        }
+
+        const today = new Date(Date.now() + 5.5 * 60 * 60 * 1000)
+                        .toISOString().slice(0, 10);
+
+        const log = await dailyCron.runForClient(
+            client, today, pages, { item }
+        );
+
+        // Broadcast to dashboard so it can refresh its UI
+        broadcast("pipeline-done", log);
+
+        res.json({
+            success: log.status === "scheduled",
+            log
+        });
+
+    } catch (err) {
+
+        console.log("/generate-and-schedule error:",
+            err.response?.data || err.message);
+
+        res.json({ success: false, error: err.message });
+
+    } finally {
+
+        runningJobs.delete(clientName);
+    }
 });
 
-app.post("/generate-all-now", requireMongo, (req, res) => {
-    res.status(410).json({
-        success: false,
-        error: "/generate-all-now is deprecated. Generation now runs per-client via POST /weekly-gen/:client."
-    });
+/* ============================================================
+   /generate-all-now  — fires the pipeline for every client,
+   one after another, in the background.
+   The dashboard's "🌅 Generate for All Clients" button.
+============================================================ */
+
+let allRunInProgress = false;
+
+app.post("/generate-all-now", requireMongo, async (req, res) => {
+
+    if (allRunInProgress) {
+
+        return res.json({
+            success: false,
+            error:   "An all-clients run is already in progress."
+        });
+    }
+
+    allRunInProgress = true;
+
+    res.json({ success: true, message: "Started in background. Watch the logs." });
+
+    /* ---------- Run in background ---------- */
+
+    (async () => {
+
+        try {
+
+            await dailyCron.runDailyJob({
+                onProgress: log => broadcast("pipeline-done", log)
+            });
+
+            broadcast("pipeline-done", {
+                client: "—",
+                status: "all-done",
+                reason: "Morning run finished for all clients."
+            });
+
+        } catch (err) {
+
+            console.log("generate-all-now error:", err.message);
+
+        } finally {
+
+            allRunInProgress = false;
+        }
+    })();
 });
 
 /* ============================================================
@@ -1594,25 +2140,22 @@ app.post("/weekly-gen/:client", requireMongo, async (req, res) => {
     }
 });
 
-/* POST /regenerate-asset/:assetId — re-queue a single Drive
-   asset. When the new image arrives, the old Drive file is
-   deleted and replaced with the new one (same filename). */
-
-app.post("/regenerate-asset/:assetId", requireMongo, async (req, res) => {
+app.post("/approve-week/:client", requireMongo, async (req, res) => {
 
     try {
 
         const weeklyBatch = require("./lib/weeklyBatch");
-        const result = await weeklyBatch.regenerateAsset(req.params.assetId);
+        const result = await weeklyBatch.approveAndSchedule(req.params.client);
 
-        broadcast("weekly-regenerate-queued", {
-            assetId: req.params.assetId
+        broadcast("weekly-approved", {
+            client:    req.params.client,
+            scheduled: result.scheduled
         });
 
         res.json({ success: true, ...result });
 
     } catch (err) {
-        console.log("/regenerate-asset error:", err.message);
+        console.log("/approve-week error:", err.message);
         res.status(400).json({ error: err.message });
     }
 });
@@ -1658,6 +2201,108 @@ app.get("/drive-folder/:client", requireMongo, async (req, res) => {
 
     } catch (err) {
         console.log("/drive-folder error:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get("/ig-queue", requireMongo, async (req, res) => {
+
+    try {
+
+        const igQueue = require("./lib/igQueue");
+
+        const showAll = String(req.query.all || "").toLowerCase() === "true";
+
+        const items = showAll
+            ? await igQueue.listAll(50)
+            : await igQueue.listPending();
+
+        // Strip the page token before sending to the client — security
+        const cleaned = items.map(j => {
+            const { fbToken, ...rest } = j;
+            return rest;
+        });
+
+        res.json({ items: cleaned, count: cleaned.length });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete("/ig-queue/:jobId", requireMongo, async (req, res) => {
+
+    try {
+
+        const igQueue = require("./lib/igQueue");
+
+        const job = await igQueue.cancel(req.params.jobId);
+
+        if (!job) return res.status(404).json({ error: "Job not found" });
+
+        console.log(`[ig-queue] User canceled ${req.params.jobId}`);
+
+        broadcast("ig-canceled", {
+            jobId: job.jobId,
+            client: job.client
+        });
+
+        res.json({ success: true, jobId: job.jobId, status: job.status });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   FACEBOOK PUBLISH QUEUE — list + cancel
+============================================================ */
+
+app.get("/fb-queue", requireMongo, async (req, res) => {
+
+    try {
+
+        const fbQueue = require("./lib/fbQueue");
+
+        const showAll = String(req.query.all || "").toLowerCase() === "true";
+
+        const items = showAll
+            ? await fbQueue.listAll(50)
+            : await fbQueue.listPending();
+
+        // Strip the page token before sending to the client — security
+        const cleaned = items.map(j => {
+            const { pageToken, ...rest } = j;
+            return rest;
+        });
+
+        res.json({ items: cleaned, count: cleaned.length });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete("/fb-queue/:jobId", requireMongo, async (req, res) => {
+
+    try {
+
+        const fbQueue = require("./lib/fbQueue");
+
+        const job = await fbQueue.cancel(req.params.jobId);
+
+        if (!job) return res.status(404).json({ error: "Job not found" });
+
+        console.log(`[fb-queue] User canceled ${req.params.jobId}`);
+
+        broadcast("fb-canceled", {
+            jobId: job.jobId,
+            client: job.client
+        });
+
+        res.json({ success: true, jobId: job.jobId, status: job.status });
+
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
@@ -1931,7 +2576,33 @@ app.post("/save", requireMongo, handleSavePost);
     try {
 
         await connect();
-        console.log("ℹ Image generation only — scheduling handled by MetaFlow.");
+        // Daily cron is deprecated in favor of the weekly batch flow.
+        // Re-enable by setting LEGACY_DAILY_CRON=true in your env.
+        if (String(process.env.LEGACY_DAILY_CRON || "").toLowerCase() === "true") {
+            dailyCron.start();
+            console.log("⚠ Legacy daily cron enabled via LEGACY_DAILY_CRON=true");
+        } else {
+            console.log("ℹ Daily cron disabled. Using weekly batch flow.");
+        }
+
+        // Expose SSE broadcaster so igQueue can publish events
+        global.__sseBroadcast = (payload) => broadcast(payload.type || "event", payload);
+
+        // Rearm any pending IG queue jobs from a previous boot
+        try {
+            const igQueue = require("./lib/igQueue");
+            await igQueue.rearm();
+        } catch (e) {
+            console.log("Could not rearm IG queue:", e.message);
+        }
+
+        // Rearm any pending FB queue jobs from a previous boot
+        try {
+            const fbQueue = require("./lib/fbQueue");
+            await fbQueue.rearm();
+        } catch (e) {
+            console.log("Could not rearm FB queue:", e.message);
+        }
 
         // ── Startup health checks (non-blocking) ──
         setTimeout(runStartupChecks, 3000);
