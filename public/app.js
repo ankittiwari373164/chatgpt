@@ -1267,51 +1267,52 @@ async function loadSavedCalendar() {
 
 async function generateCreative(client, item, btn) {
 
-    if (btn) { btn.disabled = true; btn.textContent = "⏳ Queuing…"; }
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Running…"; }
 
     addAutomationLog(
-        `🚀 Queuing prompt for "${client.name}" → "${item.topic}"…`,
+        `🚀 Starting full pipeline for "${client.name}" → "${item.topic}"…`,
         "info"
     );
 
     try {
 
-        const response = await fetch("/weekly-gen/" + encodeURIComponent(client.name), {
+        const response = await fetch("/generate-and-schedule", {
             method:  "POST",
             headers: { "Content-Type": "application/json" },
-            body:    JSON.stringify({ singleItem: item })   // backend can ignore if not supported
+            body:    JSON.stringify({
+                clientName: client.name,
+                item
+            })
         });
 
         const data = await response.json();
 
-        if (response.ok && data.success) {
+        const status = data.log?.status;
 
-            const queued  = (data.queued || []).filter(q => q.status === "queued").length;
-            const already = (data.queued || []).filter(q => q.status === "already-queued").length;
+        if (status === "scheduled") {
 
-            if (queued) {
-                addAutomationLog(
-                    `📨 "${item.topic}" queued for Tampermonkey. Open chatgpt.com to process it.`,
-                    "info"
-                );
-            } else if (already) {
-                addAutomationLog(
-                    `⚠ "${item.topic}" is already queued — open chatgpt.com to process it.`,
-                    "warn"
-                );
-            } else {
-                addAutomationLog(
-                    `✓ Weekly-gen ran for "${client.name}" (${(data.queued || []).length} item(s)).`,
-                    "ok"
-                );
-            }
+            addAutomationLog(
+                `✅ ${client.name}: scheduled to ${data.log.page} ` +
+                `[image via ${data.log.imageSource}]`,
+                "ok"
+            );
 
-            refreshQueuedPrompts();
-            refreshDriveAssets();
+            loadPosts();
+
+        } else if (status === "queued") {
+
+            addAutomationLog(
+                `📨 ${client.name}: queued for Tampermonkey. ` +
+                `Open chatgpt.com to let it pick up the prompt.`,
+                "info"
+            );
 
         } else {
-            const msg = data.error || ("HTTP " + response.status);
-            addAutomationLog(`❌ ${client.name}: ${msg}`, "err");
+
+            addAutomationLog(
+                `❌ ${client.name}: ${data.error || data.log?.reason || "unknown error"}`,
+                "err"
+            );
         }
 
     } catch (e) {
