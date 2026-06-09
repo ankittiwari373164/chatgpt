@@ -5,6 +5,7 @@ const express    = require("express");
 const cors       = require("cors");
 const axios      = require("axios");
 const cloudinary = require("cloudinary").v2;
+const cron       = require("node-cron");
 
 const { connect } = require("./db/connect");
 
@@ -1486,11 +1487,58 @@ app.post("/cron/run-now", requireAdmin, (req, res) => {
     });
 });
 
-app.post("/generate-and-schedule", requireMongo, (req, res) => {
-    res.status(410).json({
-        success: false,
-        error: "/generate-and-schedule is deprecated. Use POST /weekly-gen/:client to generate a week's worth of images for one client."
-    });
+/* POST /generate-and-schedule — single-post generation.
+   Kept at the same path so the existing dashboard button works.
+   Queues ONE prompt (with weeklyContext) for the given calendar
+   item. When the image arrives it's uploaded to Drive, REPLACING
+   any existing file of the same date. */
+
+app.post("/generate-and-schedule", requireMongo, async (req, res) => {
+
+    try {
+
+        const clientName = req.body?.clientName || req.body?.client;
+        const item       = req.body?.item;
+
+        if (!clientName || !item) {
+            return res.status(400).json({
+                success: false,
+                error:   "Send { clientName, item }"
+            });
+        }
+
+        const weeklyBatch = require("./lib/weeklyBatch");
+        const result = await weeklyBatch.generateOne(clientName, item);
+
+        broadcast("pipeline-done", {
+            client: clientName,
+            status: "queued",
+            reason: `single post "${item.topic || result.date}" queued for Tampermonkey`
+        });
+
+        res.json({ success: true, log: { status: "queued", ...result }, ...result });
+
+    } catch (err) {
+        console.log("/generate-and-schedule error:", err.message);
+        res.status(400).json({ success: false, error: err.message });
+    }
+});
+
+/* Alias for clarity — same behaviour. */
+app.post("/generate-one/:client", requireMongo, async (req, res) => {
+
+    try {
+        const weeklyBatch = require("./lib/weeklyBatch");
+        const result = await weeklyBatch.generateOne(req.params.client, req.body?.item);
+        broadcast("pipeline-done", {
+            client: req.params.client,
+            status: "queued",
+            reason: `single post "${result.topic || result.date}" queued`
+        });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(400).json({ success: false, error: err.message });
+    }
 });
 
 app.post("/generate-all-now", requireMongo, (req, res) => {
@@ -1748,6 +1796,59 @@ app.post("/regenerate-asset/:assetId", requireMongo, async (req, res) => {
     } catch (err) {
         console.log("/regenerate-asset error:", err.message);
         res.status(400).json({ error: err.message });
+    }
+});
+
+/* POST /push-to-drive/:assetId — re-upload an asset that already
+   has a generated image (cloudinaryUrl) but isn't in Drive yet.
+   Used for failed uploads and for queued items whose image already
+   exists. No regeneration — pushes the existing bytes straight up. */
+
+app.post("/push-to-drive/:assetId", requireMongo, async (req, res) => {
+
+    try {
+
+        const weeklyBatch = require("./lib/weeklyBatch");
+        const result = await weeklyBatch.pushToDrive(req.params.assetId);
+
+        broadcast("weekly-uploaded", {
+            client:    result.client || "",
+            status:    "in-drive",
+            driveLink: result.driveLink || ""
+        });
+
+        res.json({ success: true, ...result });
+
+    } catch (err) {
+        console.log("/push-to-drive error:", err.message);
+        res.status(400).json({ success: false, error: err.message });
+    }
+});
+
+/* POST /cron/weekly-all — admin-guarded (curl / CLI use). */
+
+app.post("/cron/weekly-all", requireAdmin, requireMongo, async (req, res) => {
+
+    try {
+        const summary = await runWeeklyAllBatch("manual");
+        res.json({ success: true, ...summary });
+    } catch (err) {
+        console.log("/cron/weekly-all error:", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+/* POST /weekly-gen-all — same batch, public (matches the existing
+   public /weekly-gen/:client). Used by the dashboard button. */
+
+app.post("/weekly-gen-all", requireMongo, async (req, res) => {
+
+    try {
+        const summary = await runWeeklyAllBatch("manual-dashboard");
+        res.json({ success: true, ...summary });
+    } catch (err) {
+        console.log("/weekly-gen-all error:", err.message);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
@@ -2127,8 +2228,145 @@ app.post("/calendar/:client/import",
 app.post("/save", requireMongo, handleSavePost);
 
 /* ============================================================
-   BOOT  — connect Mongo, run startup health checks, start cron
+   WEEKLY-ALL BATCH RUNNER + SATURDAY SCHEDULER
+
+   runWeeklyAllBatch(trigger) loops every client and queues their
+   upcoming week, logs a RunLog, and broadcasts progress to the
+   dashboard. It's called by:
+     - the Saturday cron (automatic)
+     - POST /cron/weekly-all (manual, admin)
+     - the boot catch-up check (if a Saturday was missed)
+
+   A RunLog of type "weekly-all" records the last run so the
+   catch-up logic knows whether this week's batch already ran.
 ============================================================ */
+
+let weeklyAllRunning = false;
+
+async function runWeeklyAllBatch(trigger = "cron") {
+
+    if (weeklyAllRunning) {
+        console.log("[weekly-all] already running — skipping duplicate trigger");
+        return { skipped: true, reason: "already-running" };
+    }
+
+    weeklyAllRunning = true;
+
+    try {
+
+        console.log(`\n📦 [weekly-all] starting (trigger=${trigger})…`);
+
+        broadcast("pipeline-done", {
+            client: "system",
+            status: "queued",
+            reason: `Weekly auto-batch started for ALL clients (${trigger})`
+        });
+
+        const weeklyBatch = require("./lib/weeklyBatch");
+        const summary = await weeklyBatch.generateAllClients();
+
+        const totalQueued = summary.clients.reduce(
+            (n, c) => n + (c.queued || 0), 0
+        );
+        const errored = summary.clients.filter(c => c.status === "error");
+
+        await RunLog.create({
+            type:    "weekly-all",
+            summary: `Queued ${totalQueued} post(s) across ${summary.clients.length} client(s) (${trigger})`,
+            detail:  summary
+        });
+
+        broadcast("pipeline-done", {
+            client: "system",
+            status: errored.length ? "failed" : "scheduled",
+            reason:
+                `Weekly auto-batch done: ${totalQueued} post(s) queued for ` +
+                `${summary.clients.length} client(s)` +
+                (errored.length ? `, ${errored.length} client(s) errored` : "")
+        });
+
+        broadcast("weekly-all-done", summary);
+
+        console.log(
+            `✓ [weekly-all] done — ${totalQueued} post(s) across ` +
+            `${summary.clients.length} client(s)\n`
+        );
+
+        return summary;
+
+    } finally {
+        weeklyAllRunning = false;
+    }
+}
+
+/* Has this week's Saturday batch already run? Compares the last
+   "weekly-all" RunLog against the current week start (Monday). */
+
+async function weeklyAllRanThisWeek() {
+
+    const last = await RunLog.findOne({ type: "weekly-all" })
+        .sort({ runAt: -1 }).lean();
+
+    if (!last) return false;
+
+    // Week start (Monday 00:00) in server-local time
+    const now = new Date();
+    const day = now.getDay();                 // 0 Sun … 6 Sat
+    const diff = day === 0 ? -6 : 1 - day;    // back to Monday
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + diff);
+    monday.setHours(0, 0, 0, 0);
+
+    return new Date(last.runAt) >= monday;
+}
+
+/* Start the Saturday cron + a boot-time catch-up.
+
+   - Schedule: env WEEKLY_CRON (node-cron syntax) or default
+     "30 3 * * 6" = Saturday 03:30 UTC = Saturday 09:00 IST.
+   - Timezone: env CRON_TZ or default "Asia/Kolkata".
+   - Catch-up: on boot, if today is Saturday (or later in the week)
+     and this week's batch hasn't run yet, run it ~1 min after boot.
+     This covers Render's free tier sleeping through the cron fire. */
+
+function startWeeklyScheduler() {
+
+    const schedule = process.env.WEEKLY_CRON || "30 3 * * 6";  // Sat 09:00 IST
+    const tz       = process.env.CRON_TZ     || "Asia/Kolkata";
+
+    if (!cron.validate(schedule)) {
+        console.log(`[scheduler] invalid WEEKLY_CRON "${schedule}" — auto-batch disabled.`);
+        return;
+    }
+
+    cron.schedule(schedule, () => {
+        runWeeklyAllBatch("saturday-cron").catch(e =>
+            console.log("[scheduler] weekly-all error:", e.message)
+        );
+    }, { timezone: tz });
+
+    console.log(`🗓  Weekly auto-batch scheduled: "${schedule}" (${tz}).`);
+
+    // ── Catch-up: if we're already at/after Saturday this week and the
+    //    batch hasn't run, fire it shortly after boot. ──
+    setTimeout(async () => {
+        try {
+            if (mongoose.connection.readyState !== 1) return;
+
+            const day = new Date().getDay(); // 0 Sun … 6 Sat
+            const atOrAfterSaturday = day === 6 || day === 0;
+
+            if (atOrAfterSaturday && !(await weeklyAllRanThisWeek())) {
+                console.log("[scheduler] catch-up: weekly batch missed this week — running now.");
+                await runWeeklyAllBatch("saturday-catchup");
+            }
+        } catch (e) {
+            console.log("[scheduler] catch-up check failed:", e.message);
+        }
+    }, 60_000);
+}
+
+
 
 (async function boot() {
 
@@ -2139,6 +2377,9 @@ app.post("/save", requireMongo, handleSavePost);
 
         // ── Startup health checks (non-blocking) ──
         setTimeout(runStartupChecks, 3000);
+
+        // ── Weekly auto-batch scheduler (Saturday) ──
+        startWeeklyScheduler();
 
     } catch (err) {
 

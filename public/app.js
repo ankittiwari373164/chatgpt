@@ -773,6 +773,45 @@ async function clearGoogleSa() {
    WEEKLY BATCH
 ============================================================ */
 
+/* Manually run the Saturday batch now — queue the upcoming week
+   for every client. */
+
+async function generateAllClientsNow() {
+
+    if (!confirm(
+        `Generate the upcoming week for ALL clients now?\n\n` +
+        `This queues prompts for every client. Make sure Tampermonkey ` +
+        `is running on the ChatGPT tab so it can process them.`
+    )) return;
+
+    addAutomationLog(`⚡ Starting weekly batch for ALL clients…`, "info");
+
+    try {
+        const r = await fetch("/weekly-gen-all", { method: "POST" });
+        const d = await r.json();
+
+        if (r.ok && d.success) {
+            const total = (d.clients || []).reduce((n, c) => n + (c.queued || 0), 0);
+            addAutomationLog(
+                `✓ All-clients batch: ${total} post(s) queued across ${(d.clients || []).length} client(s)`,
+                "ok"
+            );
+            (d.clients || []).forEach(c => {
+                if (c.status === "error") {
+                    addAutomationLog(`   ⚠ ${c.client}: ${c.error}`, "warn");
+                }
+            });
+            refreshDriveAssets();
+            refreshQueuedPrompts();
+        } else {
+            addAutomationLog(`❌ All-clients batch failed: ${d.error || "unknown"}`, "err");
+            alert("Failed: " + (d.error || "unknown"));
+        }
+    } catch (e) {
+        addAutomationLog(`❌ All-clients batch failed: ${e.message}`, "err");
+    }
+}
+
 async function generateWeekForClient() {
     const name = document.getElementById("clients")?.value?.trim();
     if (!name) return alert("Pick a client first");
@@ -803,6 +842,31 @@ async function generateWeekForClient() {
         }
     } catch (e) {
         addAutomationLog(`❌ Weekly batch failed: ${e.message}`, "err");
+    }
+}
+
+/* Push an already-generated image straight to Drive (failed upload
+   or interrupted queued item). No regeneration. */
+
+async function pushToDrive(assetId, topic) {
+
+    addAutomationLog(`⬆ Pushing "${topic || "image"}" to Drive…`, "info");
+
+    try {
+        const r = await fetch("/push-to-drive/" + encodeURIComponent(assetId), {
+            method: "POST"
+        });
+        const d = await r.json();
+
+        if (r.ok && d.success) {
+            addAutomationLog(`✓ Pushed to Drive`, "ok");
+            refreshDriveAssets();
+        } else {
+            addAutomationLog(`❌ Push failed: ${d.error || "unknown"}`, "err");
+            alert("Push failed: " + (d.error || "unknown"));
+        }
+    } catch (e) {
+        addAutomationLog(`❌ Push failed: ${e.message}`, "err");
     }
 }
 
@@ -944,6 +1008,14 @@ async function refreshDriveAssets() {
                     a.status === "generating" ? "#ffd97e"
                   : a.status === "failed"     ? "#ff7e7e"
                   : "#888";
+
+                // If the image already exists (cloudinaryUrl) but isn't in Drive,
+                // offer a one-click push — no regeneration needed. Covers failed
+                // uploads and interrupted queued items.
+                const canPush = !!a.cloudinaryUrl;
+                const assetId = a._id || "";
+                const escTopic = escapeHTML((a.topic || a.fileName || "").replace(/'/g, "\\'"));
+
                 html += `
                 <div style="background:#161616; border:1px solid #2a2a2a; border-radius:6px;
                             padding:8px 12px; margin-bottom:4px; display:flex; gap:10px;
@@ -952,6 +1024,14 @@ async function refreshDriveAssets() {
                     <span style="flex:1;">${escapeHTML(a.fileName || "?")}</span>
                     <span style="color:#666;">${escapeHTML(a.calendarDate || "")}</span>
                     ${a.error ? `<span style="color:#ff7e7e; font-size:10px;">${escapeHTML(a.error.slice(0, 60))}</span>` : ""}
+                    ${canPush && assetId
+                        ? `<button onclick="pushToDrive('${assetId}','${escTopic}')"
+                            style="background:#10261a; border:1px solid #205a3a;
+                                   color:#7effb0; padding:5px 10px; border-radius:5px;
+                                   cursor:pointer; font-size:11px; white-space:nowrap;">
+                            ⬆ Push to Drive
+                          </button>`
+                        : ""}
                 </div>`;
             });
             html += "</div>";
@@ -1287,33 +1367,23 @@ async function generateCreative(client, item, btn) {
 
         const data = await response.json();
 
-        const status = data.log?.status;
-
-        if (status === "scheduled") {
-
+        if (!response.ok || data.success === false) {
             addAutomationLog(
-                `✅ ${client.name}: scheduled to ${data.log.page} ` +
-                `[image via ${data.log.imageSource}]`,
-                "ok"
-            );
-
-            loadPosts();
-
-        } else if (status === "queued") {
-
-            addAutomationLog(
-                `📨 ${client.name}: queued for Tampermonkey. ` +
-                `Open chatgpt.com to let it pick up the prompt.`,
-                "info"
-            );
-
-        } else {
-
-            addAutomationLog(
-                `❌ ${client.name}: ${data.error || data.log?.reason || "unknown error"}`,
+                `❌ ${client.name}: ${data.error || "could not queue post"}`,
                 "err"
             );
+            return;
         }
+
+        addAutomationLog(
+            `📨 ${client.name}: "${item.topic || ""}" queued for Tampermonkey. ` +
+            `Open chatgpt.com so it picks up the prompt — the image then uploads to Drive ` +
+            `(replacing any existing post for ${item.date || "this date"}).`,
+            "ok"
+        );
+
+        refreshDriveAssets();
+        refreshQueuedPrompts();
 
     } catch (e) {
 
@@ -1482,8 +1552,20 @@ function connectSSE() {
         } catch (_) {}
     });
 
-    es.addEventListener("weekly-cleared", evt => {
+    es.addEventListener("weekly-all-done", evt => {
         try {
+            const d = JSON.parse(evt.data);
+            const total = (d.clients || []).reduce((n, c) => n + (c.queued || 0), 0);
+            addAutomationLog(
+                `📦 Saturday auto-batch: ${total} post(s) queued across ${(d.clients || []).length} client(s)`,
+                "ok"
+            );
+            refreshDriveAssets();
+            refreshQueuedPrompts();
+        } catch (_) {}
+    });
+
+    es.addEventListener("weekly-cleared", evt => {        try {
             const d = JSON.parse(evt.data);
             addAutomationLog(
                 `🗑 Queue cleared for ${d.client} — ${d.promptsDeleted} prompt(s), ${d.assetsDeleted} asset(s)`,

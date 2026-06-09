@@ -385,22 +385,30 @@ content="width=device-width, initial-scale=1.0"
         </h2>
 
         <p class="subtext" style="margin-bottom:10px;">
-            <strong>Step 1:</strong> click <em>Generate Week</em> to build this week's posts for the selected client.
-            The dashboard queues a Tampermonkey prompt per posting day (3 for MWF, 6 for Mon→Sat, 7 for Daily).
+            <strong>Automatic:</strong> every <strong>Saturday morning</strong> the server queues the whole
+            upcoming week for <em>every</em> client and uploads each image to that client's Drive folder — no
+            clicks needed. The buttons below are for manual runs / fixes.
             <br>
-            <strong>Step 2:</strong> as each image generates, it's uploaded to the client's Drive folder
-            (filename = topic). Caption + hashtags are saved in the file's Drive description.
+            <strong>Generate Week</strong> — queue this week's posts for the selected client now.
+            (3 for MWF, 6 for Mon→Sat, 7 for Daily.)
             <br>
-            <strong>Step 3:</strong> click <em>🔄 Regenerate</em> on any image you don't like — it queues a fresh
-            generation and replaces the file in Drive when done.
+            <strong>Generate Creative</strong> (per day, in Content Calendar) — queue just one post; when it
+            arrives it replaces any existing Drive file for that date.
             <br>
-            <strong>Step 4:</strong> open the Drive folder and review. MetaFlow (separate tool) picks up
-            from here for scheduling to Facebook + Instagram.
+            <strong>🔄 Regenerate</strong> — re-queue an image you don't like; replaces the Drive file when done.
+            <strong>⬆ Push to Drive</strong> — re-upload a failed/queued image that already generated, without
+            regenerating. MetaFlow then schedules everything to Facebook + Instagram.
         </p>
 
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
             <button onclick="generateWeekForClient()" class="main-btn">
                 ▶ Generate Week
+            </button>
+            <button onclick="generateAllClientsNow()"
+                style="padding:9px 16px; background:#16221d; border:1px solid #235a3e;
+                       color:#7effb0; border-radius:6px; cursor:pointer;
+                       font-weight:600; font-size:14px;">
+                ⚡ Generate All Clients (this week)
             </button>
             <button onclick="openDriveFolder()"
                 style="padding:9px 16px; background:#1d2435; border:1px solid #2c3a52;
