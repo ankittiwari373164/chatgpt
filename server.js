@@ -199,6 +199,7 @@ app.get("/current-task", requireMongo, async (req, res) => {
 
         // Look up the client to enrich the task with brand assets
         let logoUrl = "", footerUrl = "", chatLink = "", samplePosts = [];
+        let productImageUrl = "", productTitle = "", prompt = claimed.prompt;
 
         try {
             const c = await Client.findOne({ name: claimed.client }).lean();
@@ -206,16 +207,34 @@ app.get("/current-task", requireMongo, async (req, res) => {
             footerUrl   = c?.footerUrl || "";
             chatLink    = c?.chatLink  || "";
             samplePosts = Array.isArray(c?.samplePosts) ? c.samplePosts : [];
-        } catch (_) {}
+
+            /* ----- Pick a real product to feature in this creative ----- */
+            const { pickFeaturedProduct, featuredProductPromptBlock } = require("./lib/products");
+
+            // Rotate by attempts + day so consecutive posts vary the product.
+            const seed    = (claimed.attempts || 0) + Math.floor(Date.now() / 86400000);
+            const product = pickFeaturedProduct(c || {}, seed);
+
+            if (product) {
+                productImageUrl = product.image || "";
+                productTitle    = product.title || "";
+                // Append the HARD RULE so the model treats the attachment as the real product.
+                prompt = `${prompt}\n${featuredProductPromptBlock(product)}`;
+            }
+        } catch (e) {
+            console.log("/current-task product enrich failed:", e.message);
+        }
 
         res.json({
-            id:          claimed._legacyId || claimed._id,
-            client:      claimed.client,
-            prompt:      claimed.prompt,
+            id:              claimed._legacyId || claimed._id,
+            client:          claimed.client,
+            prompt,
             logoUrl,
             footerUrl,
             chatLink,
-            samplePosts
+            samplePosts,
+            productImageUrl,
+            productTitle
         });
 
     } catch (err) {
@@ -779,6 +798,13 @@ app.post("/save-client", requireMongo, async (req, res) => {
         if (b.footerUrl === "__REMOVE__")  fields.footerUrl = "";
         if (b.samplePosts === "__REMOVE_SAMPLES__") fields.samplePosts = [];
 
+        // Explicit shop-page URLs (only overwrite if the caller sent an array)
+        if (Array.isArray(b.shopPages)) {
+            fields.shopPages = b.shopPages
+                .map(u => String(u || "").trim())
+                .filter(Boolean);
+        }
+
         /* ---------- Upsert ---------- */
 
         const doc = await Client.findOneAndUpdate(
@@ -829,8 +855,18 @@ app.post("/clients/:name/scrape-products", requireMongo, async (req, res) => {
 
         const client = await Client.findOne({ name: req.params.name });
         if (!client) return res.status(404).json({ error: "Client not found" });
-        if (!client.website) {
-            return res.status(400).json({ error: "Client has no website URL set" });
+
+        // Optional: explicit shop-page URLs sent from the dashboard.
+        // Persist them on the client so future scrapes reuse them.
+        if (Array.isArray(req.body?.pages)) {
+            client.shopPages = req.body.pages
+                .map(u => String(u || "").trim())
+                .filter(u => /^https?:\/\//i.test(u));
+        }
+
+        const hasPages = Array.isArray(client.shopPages) && client.shopPages.length;
+        if (!client.website && !hasPages) {
+            return res.status(400).json({ error: "Client has no website URL or shop pages set" });
         }
 
         const result = await getProductsForClient(client, { force: true });
@@ -852,6 +888,161 @@ app.post("/clients/:name/scrape-products", requireMongo, async (req, res) => {
     } catch (err) {
 
         console.log("/clients/:name/scrape-products error:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   PATCH /clients/:name/shop-pages — save explicit shop-page
+   URLs (used by the Products manager). Body: { pages: [ ... ] }
+============================================================ */
+
+app.patch("/clients/:name/shop-pages", requireMongo, async (req, res) => {
+
+    try {
+        const client = await Client.findOne({ name: req.params.name });
+        if (!client) return res.status(404).json({ error: "Client not found" });
+
+        client.shopPages = (Array.isArray(req.body?.pages) ? req.body.pages : [])
+            .map(u => String(u || "").trim())
+            .filter(u => /^https?:\/\//i.test(u));
+
+        await client.save();
+        res.json({ success: true, shopPages: client.shopPages });
+
+    } catch (err) {
+        console.log("/clients/:name/shop-pages error:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   PUT /clients/:name/products  — manually set/upload products.
+
+   Body: { items: [ {title, price, image?, imageDataUrl?, url?,
+                     description?, featured?} ], mode?: "replace"|"merge" }
+
+   - imageDataUrl (base64) is uploaded to Cloudinary and becomes
+     the product image. A plain http(s) `image` URL is kept as-is.
+   - mode "replace" (default) overwrites the catalog; "merge"
+     appends/updates by title.
+   Returns the stored catalog.
+============================================================ */
+
+app.put("/clients/:name/products", requireMongo, async (req, res) => {
+
+    try {
+
+        const { normalizeProducts } = require("./lib/products");
+
+        const name   = req.params.name;
+        const client = await Client.findOne({ name });
+        if (!client) return res.status(404).json({ error: "Client not found" });
+
+        const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+        const mode     = req.body?.mode === "merge" ? "merge" : "replace";
+
+        /* Upload any inline base64 images to Cloudinary */
+        const safeName = name.replace(/[^a-z0-9_-]/gi, "_");
+
+        for (let i = 0; i < rawItems.length; i++) {
+            const it = rawItems[i];
+            if (it && typeof it.imageDataUrl === "string" && it.imageDataUrl.startsWith("data:")) {
+                if (!process.env.CLOUDINARY_CLOUD_NAME) {
+                    return res.status(400).json({ error: "Cloudinary is not configured on the server." });
+                }
+                try {
+                    const up = await cloudinary.uploader.upload(it.imageDataUrl, {
+                        folder:    "ai-content/clients/" + safeName + "/products",
+                        public_id: "product-" + Date.now() + "-" + i,
+                        overwrite: true
+                    });
+                    it.image = up.secure_url;
+                } catch (e) {
+                    console.log(`product image ${i} upload failed: ${e.message}`);
+                }
+                delete it.imageDataUrl;
+            }
+        }
+
+        let items = normalizeProducts(rawItems);
+
+        if (mode === "merge") {
+            const existing = normalizeProducts(client.productsCache?.items || []);
+            const byKey = new Map(existing.map(p => [p.title.toLowerCase(), p]));
+            for (const p of items) byKey.set(p.title.toLowerCase(), p);
+            items = [...byKey.values()];
+        }
+
+        client.productsCache = {
+            items,
+            scrapedAt: new Date(),
+            source:    "manual"
+        };
+        await client.save();
+
+        res.json({ success: true, count: items.length, source: "manual", items });
+
+    } catch (err) {
+        console.log("/clients/:name/products (PUT) error:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   PATCH /clients/:name/products/featured — toggle which
+   products are featured (by title). Body: { titles: [ ... ] }
+============================================================ */
+
+app.patch("/clients/:name/products/featured", requireMongo, async (req, res) => {
+
+    try {
+
+        const client = await Client.findOne({ name: req.params.name });
+        if (!client) return res.status(404).json({ error: "Client not found" });
+
+        const titles = new Set(
+            (Array.isArray(req.body?.titles) ? req.body.titles : [])
+                .map(t => String(t).toLowerCase())
+        );
+
+        const items = (client.productsCache?.items || []).map(p => ({
+            ...(p.toObject ? p.toObject() : p),
+            featured: titles.has(String(p.title).toLowerCase())
+        }));
+
+        client.productsCache = {
+            items,
+            scrapedAt: client.productsCache?.scrapedAt || new Date(),
+            source:    client.productsCache?.source || "manual"
+        };
+        await client.save();
+
+        res.json({ success: true, items });
+
+    } catch (err) {
+        console.log("/clients/:name/products/featured error:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   DELETE /clients/:name/products — clear the product catalog
+============================================================ */
+
+app.delete("/clients/:name/products", requireMongo, async (req, res) => {
+
+    try {
+        const client = await Client.findOne({ name: req.params.name });
+        if (!client) return res.status(404).json({ error: "Client not found" });
+
+        client.productsCache = { items: [], scrapedAt: new Date(), source: "cleared" };
+        await client.save();
+
+        res.json({ success: true, count: 0 });
+
+    } catch (err) {
+        console.log("/clients/:name/products (DELETE) error:", err.message);
         res.status(500).json({ error: err.message });
     }
 });
