@@ -172,6 +172,13 @@ function renderClientsList(clients) {
                            white-space:nowrap; font-size:12px;">
                     ✏ Edit
                 </button>
+                <button
+                    onclick="openProductsManager('${encodeURIComponent(c.name).replace(/'/g, "\\'")}')"
+                    style="background:#33270f; border:1px solid #5a4620; color:#ffd97e;
+                           padding:6px 10px; border-radius:6px; cursor:pointer;
+                           white-space:nowrap; font-size:12px;">
+                    🛍 Products${pillCount ? ` (${pillCount})` : ''}
+                </button>
                 ${c.website
                     ? `<button
                         onclick="refreshProducts('${encodeURIComponent(c.name).replace(/'/g, "\\'")}')"
@@ -1878,3 +1885,300 @@ async function clearLogs() {
 
     connectSSE();
 })();
+
+/* ============================================================
+   PRODUCTS MANAGER — manual upload + featured selection.
+   Self-contained: builds its own modal, no HTML changes needed.
+============================================================ */
+
+window.__pm = { client: null, items: [] };
+
+function pmEnsureModal() {
+    if (document.getElementById("pm-overlay")) return;
+
+    const overlay = document.createElement("div");
+    overlay.id = "pm-overlay";
+    overlay.style.cssText =
+        "display:none; position:fixed; inset:0; z-index:9999;" +
+        "background:rgba(0,0,0,.7); align-items:center; justify-content:center; padding:20px;";
+    overlay.innerHTML = `
+      <div style="background:#111; border:1px solid #2a2a2a; border-radius:12px;
+                  width:min(760px,96vw); max-height:90vh; overflow:auto; padding:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h3 id="pm-title" style="margin:0; color:#ffd97e;">🛍 Products</h3>
+          <button onclick="closeProductsManager()"
+                  style="background:#2a1010; border:1px solid #5a2020; color:#f99;
+                         border-radius:6px; padding:4px 10px; cursor:pointer;">✕</button>
+        </div>
+
+        <div id="pm-shoppages" style="background:#141414; border:1px solid #2a2a2a;
+             border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <strong style="color:#aef; font-size:13px;">🔗 Shop page URLs (fetched directly)</strong>
+            <button onclick="pmAddPage()" style="background:#1d3a2a; border:1px solid #2c5a3a;
+                    color:#aef; padding:3px 9px; border-radius:5px; cursor:pointer; font-size:12px;">+ URL</button>
+          </div>
+          <div id="pm-pages-rows"></div>
+          <button onclick="pmFetchFromPages()" style="margin-top:6px; background:#234; border:1px solid #46a;
+                  color:#cde; padding:5px 12px; border-radius:6px; cursor:pointer; font-size:12px;">
+            🔍 Fetch products from these pages
+          </button>
+          <div style="font-size:11px; color:#777; margin-top:4px;">
+            Add each shop/collection page (e.g. …/collections/summer, …/shop, shop.brand.com). Saved with the client.
+          </div>
+        </div>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+          <button onclick="pmAddRow()" style="background:#1d3a2a; border:1px solid #2c5a3a;
+                  color:#aef; padding:6px 12px; border-radius:6px; cursor:pointer;">+ Add product</button>
+          <button onclick="document.getElementById('pm-json').style.display =
+                  document.getElementById('pm-json').style.display==='none'?'block':'none'"
+                  style="background:#1d2435; border:1px solid #2c3a52; color:#aac;
+                         padding:6px 12px; border-radius:6px; cursor:pointer;">Paste JSON/CSV</button>
+          <button onclick="pmClear()" style="background:#3a1010; border:1px solid #5a2020;
+                  color:#faa; padding:6px 12px; border-radius:6px; cursor:pointer;">Clear all</button>
+        </div>
+
+        <div id="pm-json" style="display:none; margin-bottom:12px;">
+          <textarea id="pm-json-text" placeholder='Paste a JSON array [{"title":"..","price":"..","image":"https://.."}]  — or CSV: title,price,image,url'
+                    style="width:100%; height:90px; background:#0a0a0a; color:#ddd;
+                           border:1px solid #2a2a2a; border-radius:6px; padding:8px; font-family:monospace; font-size:12px;"></textarea>
+          <button onclick="pmImportText()" style="margin-top:6px; background:#1d3a2a;
+                  border:1px solid #2c5a3a; color:#aef; padding:6px 12px; border-radius:6px; cursor:pointer;">Import</button>
+        </div>
+
+        <div id="pm-rows"></div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; gap:10px;">
+          <span style="font-size:12px; color:#888;">⭐ = featured (used first in creatives). Product image is attached to the AI generation as the hero.</span>
+          <button onclick="pmSave()" style="background:#234; border:1px solid #46a; color:#cde;
+                  padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:600;">💾 Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", e => { if (e.target === overlay) closeProductsManager(); });
+}
+
+async function openProductsManager(encodedName) {
+    pmEnsureModal();
+    const name = decodeURIComponent(encodedName);
+    window.__pm.client = name;
+
+    let client = (window.clientsData || []).find(c => c.name === name);
+    try {
+        const r = await fetch("/clients/" + encodeURIComponent(name));
+        if (r.ok) client = await r.json();
+    } catch (_) {}
+
+    window.__pm.items = ((client && client.productsCache && client.productsCache.items) || [])
+        .map(p => ({ title: p.title || "", price: p.price || "", image: p.image || "",
+                     url: p.url || "", description: p.description || "", featured: !!p.featured,
+                     imageDataUrl: "" }));
+
+    window.__pm.shopPages = ((client && client.shopPages) || []).slice();
+    if (!window.__pm.shopPages.length) window.__pm.shopPages = [""];
+
+    document.getElementById("pm-title").textContent = "🛍 Products — " + name;
+    pmRenderPages();
+    pmRender();
+    document.getElementById("pm-overlay").style.display = "flex";
+}
+
+function closeProductsManager() {
+    const o = document.getElementById("pm-overlay");
+    if (o) o.style.display = "none";
+}
+
+function pmAddRow() {
+    window.__pm.items.push({ title:"", price:"", image:"", url:"", description:"", featured:false, imageDataUrl:"" });
+    pmRender();
+}
+
+function pmClear() {
+    if (!confirm("Remove all products from this list? (Save to persist.)")) return;
+    window.__pm.items = [];
+    pmRender();
+}
+
+function pmRender() {
+    const box = document.getElementById("pm-rows");
+    if (!window.__pm.items.length) {
+        box.innerHTML = '<div style="color:#666; padding:12px 0;">No products yet. Add one, paste JSON/CSV, or use 🔍 Scrape.</div>';
+        return;
+    }
+    box.innerHTML = window.__pm.items.map((p, i) => {
+        const thumb = p.imageDataUrl || p.image;
+        return `
+        <div style="display:flex; gap:8px; align-items:flex-start; padding:8px;
+                    background:#161616; border:1px solid #2a2a2a; border-radius:8px; margin-bottom:6px;">
+          <label style="cursor:pointer; flex:0 0 auto;">
+            <div style="width:56px; height:56px; border-radius:6px; overflow:hidden;
+                        background:#0a0a0a; border:1px solid #2a2a2a; display:flex;
+                        align-items:center; justify-content:center; font-size:10px; color:#555;">
+              ${thumb ? `<img src="${escapeHTML(thumb)}" style="width:100%;height:100%;object-fit:cover;">` : 'img'}
+            </div>
+            <input type="file" accept="image/*" style="display:none"
+                   onchange="pmImageChosen(${i}, this)">
+          </label>
+          <div style="flex:1; min-width:0; display:grid; gap:4px;">
+            <input value="${escapeHTML(p.title)}" placeholder="Product title"
+                   oninput="window.__pm.items[${i}].title=this.value"
+                   style="background:#0a0a0a;color:#eee;border:1px solid #2a2a2a;border-radius:5px;padding:5px;">
+            <div style="display:flex; gap:4px;">
+              <input value="${escapeHTML(p.price)}" placeholder="Price"
+                     oninput="window.__pm.items[${i}].price=this.value"
+                     style="width:110px;background:#0a0a0a;color:#eee;border:1px solid #2a2a2a;border-radius:5px;padding:5px;">
+              <input value="${escapeHTML(p.image)}" placeholder="Image URL (or upload ←)"
+                     oninput="window.__pm.items[${i}].image=this.value"
+                     style="flex:1;background:#0a0a0a;color:#eee;border:1px solid #2a2a2a;border-radius:5px;padding:5px;">
+            </div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px; flex:0 0 auto;">
+            <button title="Feature this product" onclick="window.__pm.items[${i}].featured=!window.__pm.items[${i}].featured; pmRender()"
+                    style="background:${p.featured?'#4a3a10':'#1a1a1a'}; border:1px solid ${p.featured?'#7a6020':'#2a2a2a'};
+                           color:${p.featured?'#ffd97e':'#666'}; border-radius:5px; padding:5px 8px; cursor:pointer;">⭐</button>
+            <button onclick="window.__pm.items.splice(${i},1); pmRender()"
+                    style="background:#2a1010; border:1px solid #5a2020; color:#f99; border-radius:5px; padding:5px 8px; cursor:pointer;">🗑</button>
+          </div>
+        </div>`;
+    }).join("");
+}
+
+function pmImageChosen(i, input) {
+    const f = input.files && input.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => { window.__pm.items[i].imageDataUrl = reader.result; pmRender(); };
+    reader.readAsDataURL(f);
+}
+
+function pmImportText() {
+    const txt = (document.getElementById("pm-json-text").value || "").trim();
+    if (!txt) return;
+    let parsed = [];
+    try {
+        parsed = JSON.parse(txt);
+        if (!Array.isArray(parsed)) parsed = [parsed];
+    } catch (_) {
+        // CSV fallback: title,price,image,url
+        parsed = txt.split(/\r?\n/).filter(Boolean).map(line => {
+            const [title, price, image, url] = line.split(",").map(s => (s || "").trim());
+            return { title, price, image, url };
+        }).filter(p => p.title && p.title.toLowerCase() !== "title");
+    }
+    for (const p of parsed) {
+        window.__pm.items.push({
+            title: p.title || p.name || "", price: p.price || "", image: p.image || "",
+            url: p.url || "", description: p.description || "", featured: !!p.featured, imageDataUrl: ""
+        });
+    }
+    document.getElementById("pm-json-text").value = "";
+    document.getElementById("pm-json").style.display = "none";
+    pmRender();
+}
+
+function pmRenderPages() {
+    const box = document.getElementById("pm-pages-rows");
+    if (!box) return;
+    box.innerHTML = window.__pm.shopPages.map((u, i) => `
+        <div style="display:flex; gap:6px; margin-bottom:4px;">
+          <input value="${escapeHTML(u)}" placeholder="https://client-site.com/collections/all"
+                 oninput="window.__pm.shopPages[${i}]=this.value"
+                 style="flex:1; background:#0a0a0a; color:#eee; border:1px solid #2a2a2a;
+                        border-radius:5px; padding:5px; font-size:12px;">
+          <button onclick="window.__pm.shopPages.splice(${i},1); if(!window.__pm.shopPages.length)window.__pm.shopPages=['']; pmRenderPages()"
+                  style="background:#2a1010; border:1px solid #5a2020; color:#f99;
+                         border-radius:5px; padding:0 9px; cursor:pointer;">✕</button>
+        </div>`).join("");
+}
+
+function pmAddPage() {
+    window.__pm.shopPages.push("");
+    pmRenderPages();
+}
+
+function pmCleanPages() {
+    return (window.__pm.shopPages || [])
+        .map(u => (u || "").trim())
+        .filter(u => /^https?:\/\//i.test(u));
+}
+
+async function pmFetchFromPages() {
+    const name  = window.__pm.client;
+    const pages = pmCleanPages();
+    if (!pages.length) {
+        addAutomationLog("⚠ Add at least one valid http(s) shop page URL first.", "warn");
+        return;
+    }
+    addAutomationLog(`🔍 Fetching products from ${pages.length} page(s) for "${name}"…`, "info");
+    try {
+        const r = await fetch("/clients/" + encodeURIComponent(name) + "/scrape-products", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pages })
+        });
+        const d = await r.json();
+        if (d.success) {
+            addAutomationLog(`✓ Found ${d.count} product(s) (source: ${d.source})`, "ok");
+            // Merge fetched items into the modal's editable list (dedupe by title)
+            const have = new Set(window.__pm.items.map(p => (p.title || "").toLowerCase()));
+            for (const p of (d.items || [])) {
+                const key = (p.title || "").toLowerCase();
+                if (key && !have.has(key)) {
+                    have.add(key);
+                    window.__pm.items.push({
+                        title: p.title || "", price: p.price || "", image: p.image || "",
+                        url: p.url || "", description: p.description || "", featured: false, imageDataUrl: ""
+                    });
+                }
+            }
+            pmRender();
+        } else {
+            addAutomationLog(`❌ Fetch failed: ${d.error || "unknown"}`, "err");
+        }
+    } catch (e) {
+        addAutomationLog(`❌ Fetch failed: ${e.message}`, "err");
+    }
+}
+
+async function pmSave() {
+    const name  = window.__pm.client;
+
+    // Persist shop-page URLs first (independent of products)
+    try {
+        await fetch("/clients/" + encodeURIComponent(name) + "/shop-pages", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pages: pmCleanPages() })
+        });
+    } catch (_) {}
+
+    const items = window.__pm.items
+        .filter(p => (p.title || "").trim())
+        .map(p => {
+            const o = { title: p.title.trim(), price: p.price, url: p.url,
+                        description: p.description, featured: !!p.featured };
+            if (p.imageDataUrl) o.imageDataUrl = p.imageDataUrl;
+            else if (p.image)   o.image = p.image;
+            return o;
+        });
+
+    addAutomationLog(`💾 Saving ${items.length} product(s) for "${name}"…`, "info");
+    try {
+        const r = await fetch("/clients/" + encodeURIComponent(name) + "/products", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items, mode: "replace" })
+        });
+        const d = await r.json();
+        if (d.success) {
+            addAutomationLog(`✓ Saved ${d.count} product(s) for "${name}"`, "ok");
+            closeProductsManager();
+            loadClients();
+        } else {
+            addAutomationLog(`❌ Save failed: ${d.error || "unknown"}`, "err");
+        }
+    } catch (e) {
+        addAutomationLog(`❌ Save failed: ${e.message}`, "err");
+    }
+}
