@@ -359,6 +359,8 @@ async function saveClient() {
         description: $("description")?.value.trim() || "",
         chatLink:    $("chatLink")?.value.trim()    || "",
         driveFolderUrl: $("driveFolderUrl")?.value.trim() || "",
+        shopPages:   ($("shopPages")?.value || "")
+                        .split(",").map(s => s.trim()).filter(Boolean),
         postSize:    getRadio("postSize") || "1:1",
         postDays:    getRadio("postDays") || "mwf",
         contactInCaption: !!$("contactInCaption")?.checked
@@ -451,6 +453,7 @@ async function editClient(encodedName) {
         set("description", c.description);
         set("chatLink",    c.chatLink);
         set("driveFolderUrl", c.driveFolderUrl);
+        set("shopPages", Array.isArray(c.shopPages) ? c.shopPages.join(", ") : "");
 
         const cic = document.getElementById("contactInCaption");
         // undefined = treat as ON (default for existing clients without the field)
@@ -508,7 +511,7 @@ async function editClient(encodedName) {
 
 function cancelEdit() {
 
-    ["name","industry","tone","audience","services","style","cta","website","phone","email","description","chatLink","driveFolderUrl"]
+    ["name","industry","tone","audience","services","style","cta","website","phone","email","description","chatLink","driveFolderUrl","shopPages"]
         .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
 
     const nameEl = document.getElementById("name");
