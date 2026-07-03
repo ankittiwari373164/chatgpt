@@ -22,6 +22,7 @@ const ClientSchema = new Schema({
     cta:         String,
     description: String,
     website:     String,
+    shopPages:   [String],                                 // explicit shop/catalog page URLs to scrape directly
     phone:       String,
     email:       String,
     contactInCaption: { type: Boolean, default: true },    // append phone/email/website at end of caption
