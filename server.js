@@ -10,11 +10,12 @@ const cron       = require("node-cron");
 const { connect } = require("./db/connect");
 
 const {
-    Client, Prompt, Post, Scheduled, Calendar,
+    Client, Prompt, Post, Scheduled,
     Session, MetaPage, RunLog, Log, DriveAsset
 } = require("./db/models");
 
 const dailyCron      = require("./lib/dailyCron");
+const schedulerCalendar = require("./lib/schedulerCalendar");
 const puppeteerCG    = require("./lib/puppeteerChatGPT");
 const { generateImage } = require("./lib/imageGen");
 
@@ -1058,14 +1059,14 @@ app.delete("/clients/:name", requireMongo, async (req, res) => {
         const name = req.params.name;
 
         const r1 = await Client.deleteOne({ name });
-        const r2 = await Calendar.deleteMany({ client: name });
+        const calendarWiped = await schedulerCalendar.deleteClientCalendar(name).catch(() => 0);
 
         broadcast("client-deleted", { name });
 
         res.json({
             success:        true,
             client:         r1.deletedCount,
-            calendarsWiped: r2.deletedCount
+            calendarsWiped: calendarWiped
         });
 
     } catch (err) {
@@ -1218,96 +1219,41 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
 [ { "date":"YYYY-MM-DD", "event":"", "topic":"", "goal":"" } ]
 `;
 
-        let raw = null;
-        let lastErr;
-        let lastStatus;
+        // Topic/event/goal generation now happens in the scheduler app
+        // (same Groq routine shared with the omni_flow program). We still
+        // build our own `prompt` context above for reference/logging, but
+        // the actual call — and the calendar_items storage — is delegated.
+        const businessDetails = [
+            client.industry    && `Industry: ${client.industry}`,
+            client.tone        && `Tone: ${client.tone}`,
+            client.audience    && `Audience: ${client.audience}`,
+            client.services    && `Services: ${client.services}`,
+            client.style       && `Style: ${client.style}`,
+            client.cta         && `CTA: ${client.cta}`,
+            client.website     && `Website: ${client.website}`,
+            client.description && `Description: ${client.description}`,
+            productList
+        ].filter(Boolean).join("\n");
 
-        for (let attempt = 1; attempt <= 6; attempt++) {
-
-            try {
-
-                const response = await axios.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    {
-                        model:       "llama-3.1-8b-instant",
-                        messages:    [{ role: "user", content: prompt }],
-                        temperature: 0.7,
-                        max_tokens:  3000
-                    },
-                    {
-                        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
-                        timeout: 60000
-                    }
-                );
-
-                raw = response.data.choices[0].message.content || "";
-                break;
-
-            } catch (err) {
-
-                lastErr    = err;
-                lastStatus = err.response?.status;
-
-                if (lastStatus === 429 && attempt < 6) {
-
-                    // Honor Retry-After header from Groq if present;
-                    // otherwise back off exponentially up to ~30 sec.
-                    const headerRetry = parseFloat(err.response?.headers?.["retry-after"]) || 0;
-                    const baseWait    = 2000 * Math.pow(2, attempt - 1);
-                    const waitMs      = Math.min(
-                        Math.max(headerRetry * 1000, baseWait),
-                        30000
-                    );
-
-                    console.log(
-                        `/generate-calendar: Groq 429, retrying in ${waitMs}ms (attempt ${attempt}/6)`
-                    );
-                    await new Promise(r => setTimeout(r, waitMs));
-                    continue;
-                }
-
-                break;
-            }
-        }
-
-        if (!raw) {
-
-            // Surface Groq's actual error so the user knows it's not Mongo
-            const groqMsg =
-                lastErr?.response?.data?.error?.message ||
-                lastErr?.message ||
-                "Unknown Groq error";
-
-            if (lastStatus === 429) {
-
-                return res.status(429).json({
-                    error: "Groq rate-limit reached. Wait 30-60 seconds and click again.",
-                    detail: groqMsg,
-                    source: "groq"
-                });
-            }
-
-            if (lastStatus === 401 || lastStatus === 403) {
-
-                return res.status(401).json({
-                    error: "Groq API key is invalid or unauthorized. Check GROQ_API_KEY in Render env.",
-                    detail: groqMsg,
-                    source: "groq"
-                });
-            }
-
+        let calendarRaw;
+        try {
+            calendarRaw = await schedulerCalendar.generateTopics({
+                clientName: client.name,
+                businessDetails,
+                count: cfg.count,
+                chatLink: client.chatLink
+            });
+        } catch (err) {
             return res.status(502).json({
-                error: "Could not reach Groq: " + groqMsg,
-                source: "groq"
+                error: "Could not reach scheduler for calendar generation: " + err.message,
+                source: "scheduler"
             });
         }
-
-        const calendarRaw = parseCalendarArray(raw);
 
         if (!calendarRaw.length) {
 
             return res.status(502).json({
-                error: "Groq returned an unparseable calendar. Click again to retry."
+                error: "Scheduler returned an unparseable calendar. Click again to retry."
             });
         }
 
@@ -1373,7 +1319,9 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
                 date,
                 event: String(src.event || "").trim(),
                 topic: String(src.topic || `Post ${i + 1}`).trim(),
-                goal:  String(src.goal  || "").trim()
+                goal:  String(src.goal  || "").trim(),
+                isFestive: !!src.isFestive,
+                prompt: src.isFestive ? String(src.prompt || "").trim() : ""
             };
         });
 
@@ -1383,11 +1331,7 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
             });
         }
 
-        await Calendar.findOneAndUpdate(
-            { client: client.name },
-            { client: client.name, calendar },
-            { upsert: true, new: true }
-        );
+        await schedulerCalendar.saveCalendar(client.name, calendar);
 
         console.log(
             `📅 Saved calendar for "${client.name}" — ${calendar.length} items ` +
@@ -2158,17 +2102,12 @@ app.get("/drive-folder/:client", requireMongo, async (req, res) => {
     }
 });
 
-app.get("/calendar/:client", requireMongo, async (req, res) => {
+app.get("/calendar/:client", async (req, res) => {
 
     try {
 
-        const cal = await Calendar.findOne({
-            client: req.params.client
-        }).lean();
-
-        if (!cal) return res.json({ calendar: [] });
-
-        res.json({ calendar: cal.calendar || [] });
+        const calendar = await schedulerCalendar.getCalendar(req.params.client);
+        res.json({ calendar });
 
     } catch (err) {
 
@@ -2182,7 +2121,7 @@ app.get("/calendar/:client", requireMongo, async (req, res) => {
    it in Excel. Columns: Date · Day · Event · Topic · Goal · Done.
 ============================================================ */
 
-app.get("/calendar/:client/export.xlsx", requireMongo, async (req, res) => {
+app.get("/calendar/:client/export.xlsx", async (req, res) => {
 
     try {
 
@@ -2190,9 +2129,7 @@ app.get("/calendar/:client/export.xlsx", requireMongo, async (req, res) => {
 
         const client = req.params.client;
 
-        const cal = await Calendar.findOne({ client }).lean();
-
-        const rows = cal?.calendar || [];
+        const rows = await schedulerCalendar.getCalendar(client);
 
         const wb = new ExcelJS.Workbook();
         wb.creator = "AI Content Automation";
@@ -2386,11 +2323,7 @@ app.post("/calendar/:client/import",
                 });
             }
 
-            await Calendar.findOneAndUpdate(
-                { client },
-                { client, calendar },
-                { upsert: true, new: true }
-            );
+            await schedulerCalendar.saveCalendar(client, calendar);
 
             console.log(
                 `📥 Imported calendar for "${client}" — ${calendar.length} rows ` +
