@@ -101,7 +101,9 @@ const CalendarSchema = new Schema({
         event: String,
         topic: String,
         goal:  String,
-        done:  { type: Boolean, default: false } // tracks daily-cron progress
+        done:  { type: Boolean, default: false }, // tracks daily-cron progress
+        prompt:    { type: String, default: "" },     // pre-built festive image prompt
+        isFestive: { type: Boolean, default: false }  // weeklyBatch uses this for festive posts
     }]
 }, { timestamps: true });
 
