@@ -1,5 +1,6 @@
 require("dotenv").config();
 console.log("GROQ_API_KEY loaded:", !!process.env.GROQ_API_KEY);
+console.log("GROQ_ENABLED:", process.env.GROQ_ENABLED);
 
 const express    = require("express");
 const cors       = require("cors");
@@ -1163,7 +1164,8 @@ async function persistLog(message, level = "info") {
 }
 
 /* ============================================================
-   CONTENT CALENDAR
+   CONTENT CALENDAR — GROQ-ENABLED VERSION
+   Enhanced error handling and logging for Groq integration
 ============================================================ */
 
 app.post("/generate-calendar", requireMongo, async (req, res) => {
@@ -1172,6 +1174,11 @@ app.post("/generate-calendar", requireMongo, async (req, res) => {
 
         const client = req.body;
         const today  = new Date().toISOString().split("T")[0];
+
+        /* ----- Validate input ----- */
+        if (!client || !client.name) {
+            return res.status(400).json({ error: "Client data is required" });
+        }
 
         /* ----- Resolve postDays into a description Groq understands ----- */
 
@@ -1219,11 +1226,10 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
 [ { "date":"YYYY-MM-DD", "event":"", "topic":"", "goal":"" } ]
 `;
 
-        // Topic/event/goal generation now happens in the scheduler app
-        // (same Groq routine shared with the omni_flow program). We still
-        // build our own `prompt` context above for reference/logging, but
-        // the actual call — and the calendar_items storage — is delegated.
+        /* ----- Build comprehensive business details for Groq ----- */
+        
         const businessDetails = [
+            client.name && `Brand: ${client.name}`,
             client.industry    && `Industry: ${client.industry}`,
             client.tone        && `Tone: ${client.tone}`,
             client.audience    && `Audience: ${client.audience}`,
@@ -1232,28 +1238,65 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
             client.cta         && `CTA: ${client.cta}`,
             client.website     && `Website: ${client.website}`,
             client.description && `Description: ${client.description}`,
+            `Posting Schedule: ${cfg.label}`,
+            `Required Posts: ${cfg.count}`,
             productList
         ].filter(Boolean).join("\n");
 
+        console.log(`📅 Generating calendar for "${client.name}" — ${cfg.count} posts (${postDays})…`);
+
         let calendarRaw;
+        
         try {
+            // Call the Groq-enabled generateTopics function
             calendarRaw = await schedulerCalendar.generateTopics({
                 clientName: client.name,
                 businessDetails,
                 count: cfg.count,
                 chatLink: client.chatLink
             });
+            
+            console.log(`✅ Generated ${calendarRaw.length} topics via Groq`);
+            
         } catch (err) {
-            return res.status(502).json({
-                error: "Could not reach scheduler for calendar generation: " + err.message,
-                source: "scheduler"
+            
+            console.error(`❌ Calendar generation failed for "${client.name}":`, err.message);
+            
+            // Provide specific error messages based on the error type
+            let statusCode = 503;
+            let errorMessage = err.message;
+            
+            if (err.message.includes("GROQ_API_KEY")) {
+                statusCode = 500;
+                errorMessage = "Groq API key is not configured. Please set GROQ_API_KEY in .env";
+            } else if (err.message.includes("Groq API error")) {
+                statusCode = 503;
+                errorMessage = err.message;
+            } else if (err.message.includes("scheduler")) {
+                statusCode = 502;
+                errorMessage = "Scheduler service unavailable. Ensure Groq is configured or scheduler is reachable.";
+            }
+            
+            return res.status(statusCode).json({
+                error: errorMessage,
+                hint: "Check server logs and .env configuration",
+                source: err.message.includes("GROQ") ? "groq" : "scheduler"
             });
         }
 
-        if (!calendarRaw.length) {
-
+        if (!calendarRaw || !Array.isArray(calendarRaw)) {
+            console.error("Invalid response from calendar generation");
             return res.status(502).json({
-                error: "Scheduler returned an unparseable calendar. Click again to retry."
+                error: "Calendar generation returned invalid data",
+                hint: "Check that GROQ_API_KEY is valid"
+            });
+        }
+
+        if (calendarRaw.length === 0) {
+            console.error("Empty calendar returned");
+            return res.status(502).json({
+                error: "No calendar items were generated",
+                hint: "Try clicking Generate Calendar again"
             });
         }
 
@@ -1262,13 +1305,6 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
            postDays, then assign Groq's topics in order. This way the
            schedule is guaranteed to match the configured day pattern
            regardless of what dates Groq returns.
-
-           Strategy:
-             - Start from today (or tomorrow if today isn't a posting day)
-             - Walk forward day-by-day, collecting dates whose weekday
-               is in the allowed set
-             - Stop when we have cfg.count dates
-             - Assign Groq topics in order to those dates
         ============================================================ */
 
         const allowedDayIdx = {
@@ -1288,14 +1324,13 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
 
         const scheduledDates = [];
         const start = new Date();
-        // Normalize to UTC midnight so getUTCDay is stable
         const cursor = new Date(Date.UTC(
             start.getUTCFullYear(),
             start.getUTCMonth(),
             start.getUTCDate()
         ));
 
-        const HARD_CAP_DAYS = 60; // safety limit so we never loop forever
+        const HARD_CAP_DAYS = 60;
         let walked = 0;
 
         while (scheduledDates.length < cfg.count && walked < HARD_CAP_DAYS) {
@@ -1307,9 +1342,9 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
             walked++;
         }
 
-        /* Assign Groq's topics to our calculated dates in order.
-           If Groq returned fewer topics than dates, the extras are
-           assigned generic topics. If more, the extras are dropped. */
+        console.log(`📅 Calculated ${scheduledDates.length} posting dates`);
+
+        /* Assign Groq's topics to our calculated dates in order. */
 
         const calendar = scheduledDates.map((date, i) => {
 
@@ -1326,23 +1361,57 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
         });
 
         if (!calendar.length) {
-            return res.status(502).json({
-                error: "Could not build a calendar — internal error"
+            return res.status(500).json({
+                error: "Could not build calendar with dates — internal error"
             });
         }
 
-        await schedulerCalendar.saveCalendar(client.name, calendar);
-
-        console.log(
-            `📅 Saved calendar for "${client.name}" — ${calendar.length} items ` +
-            `(rebuilt dates: ${postDays}, ${cfg.count} per month)`
-        );
+        /* ----- Save the calendar ----- */
+        try {
+            await schedulerCalendar.saveCalendar(client.name, calendar);
+            console.log(
+                `✅ Saved calendar for "${client.name}" — ${calendar.length} items ` +
+                `(schedule: ${postDays})`
+            );
+        } catch (saveErr) {
+            console.error("Failed to save calendar:", saveErr.message);
+            return res.status(500).json({
+                error: "Calendar generated but failed to save: " + saveErr.message,
+                calendar: calendar
+            });
+        }
 
         res.json(calendar);
 
     } catch (err) {
 
-        console.log("/generate-calendar error:", err.message);
+        console.error("/generate-calendar error:", err.message);
+        res.status(500).json({ 
+            error: err.message,
+            hint: "Check server logs for details"
+        });
+    }
+});
+
+/* ============================================================
+   Configuration health check endpoint
+============================================================ */
+
+app.get("/api/health/calendar", async (req, res) => {
+    try {
+        const checks = {
+            groq_enabled: !!process.env.GROQ_ENABLED,
+            groq_key_set: !!process.env.GROQ_API_KEY,
+            scheduler_url_set: !!process.env.SCHEDULER_URL,
+            timestamp: new Date().toISOString()
+        };
+        
+        res.json({
+            status: "ok",
+            calendar_service: checks.groq_enabled ? "groq" : (checks.scheduler_url_set ? "scheduler" : "not_configured"),
+            checks
+        });
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
@@ -1350,15 +1419,13 @@ Return JSON Array ONLY. Do not add any commentary. Use this exact shape:
 /* ============================================================
    Resilient parser for the Groq calendar response.
    Falls back to extracting individual {…} objects by regex if
-   the full JSON.parse fails (which it often does because Groq
-   returns unescaped quotes/newlines in topic/goal strings).
+   the full JSON.parse fails.
 ============================================================ */
 
 function parseCalendarArray(raw) {
 
     let txt = String(raw).replace(/```json|```/g, "").trim();
 
-    // Strategy 1: locate the outer [ … ] block and parse
     const start = txt.indexOf("[");
     const end   = txt.lastIndexOf("]") + 1;
 
@@ -1373,7 +1440,6 @@ function parseCalendarArray(raw) {
         } catch (_) {}
     }
 
-    // Strategy 2: pull out each {…} block individually
     const out = [];
     const objRe = /\{[^{}]*\}/g;
     let m;
@@ -1389,7 +1455,6 @@ function parseCalendarArray(raw) {
 
         } catch (_) {
 
-            // Strategy 3 for this single object: extract fields by regex
             const o = {};
             const fieldRe = /"(\w+)"\s*:\s*"((?:\\.|[^"\\])*)"/g;
             let f;
@@ -1451,8 +1516,7 @@ Return a highly detailed visual prompt for an AI image generator.
 });
 
 /* ============================================================
-   /meta/delete-pages — legacy cleanup endpoint (clears any stored
-   MetaPage records left over from before MetaFlow took over).
+   /meta/delete-pages — legacy cleanup endpoint
 ============================================================ */
 
 app.post("/meta/delete-pages", requireMongo, async (req, res) => {
@@ -1503,9 +1567,7 @@ app.get("/scheduled", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   SCHEDULE-POST — REMOVED. Scheduling is now handled by MetaFlow
-   reading from each client's Drive folder. This endpoint stays
-   as a clear 410 Gone so any stale UI calls get an obvious error.
+   SCHEDULE-POST — REMOVED
 ============================================================ */
 
 app.post("/schedule-post", requireMongo, async (req, res) => {
@@ -1516,7 +1578,7 @@ app.post("/schedule-post", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   CHATGPT COOKIE MGMT  — upload, verify, view
+   CHATGPT COOKIE MGMT
 ============================================================ */
 
 const COOKIE_AUTH = process.env.ADMIN_TOKEN || "change-me";
@@ -1564,7 +1626,6 @@ app.get("/chatgpt/test", requireAdmin, async (req, res) => {
 
         const result = await puppeteerCG.testLogin();
 
-        // New return shape: { loggedIn, detail } — pass through
         if (result && typeof result === "object" && "loggedIn" in result) {
 
             res.json({
@@ -1575,7 +1636,6 @@ app.get("/chatgpt/test", requireAdmin, async (req, res) => {
 
         } else {
 
-            // Old shape (just a boolean) — keep compat
             res.json({ success: true, loggedIn: !!result });
         }
 
@@ -1610,9 +1670,7 @@ app.get("/chatgpt/status", requireMongo, async (req, res) => {
 });
 
 /* ============================================================
-   Deprecated endpoints. Image generation now happens via the
-   weekly batch flow (`POST /weekly-gen/:client`); scheduling
-   happens in MetaFlow.
+   Deprecated endpoints
 ============================================================ */
 
 app.post("/cron/run-now", requireAdmin, (req, res) => {
@@ -1621,12 +1679,6 @@ app.post("/cron/run-now", requireAdmin, (req, res) => {
         error: "Daily cron is deprecated. Use POST /weekly-gen/:client to start the weekly image batch."
     });
 });
-
-/* POST /generate-and-schedule — single-post generation.
-   Kept at the same path so the existing dashboard button works.
-   Queues ONE prompt (with weeklyContext) for the given calendar
-   item. When the image arrives it's uploaded to Drive, REPLACING
-   any existing file of the same date. */
 
 app.post("/generate-and-schedule", requireMongo, async (req, res) => {
 
@@ -1659,7 +1711,6 @@ app.post("/generate-and-schedule", requireMongo, async (req, res) => {
     }
 });
 
-/* Alias for clarity — same behaviour. */
 app.post("/generate-one/:client", requireMongo, async (req, res) => {
 
     try {
@@ -1684,423 +1735,8 @@ app.post("/generate-all-now", requireMongo, (req, res) => {
 });
 
 /* ============================================================
-   /calendar/:client  — fetch a previously saved calendar.
-   Called by the dashboard on page load so calendars survive
-   refresh.
+   /calendar/:client  — fetch a previously saved calendar
 ============================================================ */
-
-/* ============================================================
-   INSTAGRAM PUBLISH QUEUE — list + cancel
-============================================================ */
-
-/* ============================================================
-   SETTINGS: Google Service Account JSON
-============================================================ */
-
-app.get("/settings/google-sa", requireMongo, async (req, res) => {
-
-    try {
-
-        const drive = require("./lib/drive");
-        const info  = await drive.getAuthInfo();
-
-        // Backward-compat shape for the existing dashboard JS
-        res.json({
-            configured:   info.mode !== "none",
-            mode:         info.mode,                       // "oauth" | "service-account" | "none"
-            client_email: info.email,                       // works for both modes
-            email:        info.email
-        });
-
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.post("/settings/google-sa", requireMongo, async (req, res) => {
-
-    try {
-
-        const json = req.body?.json;
-        if (!json || typeof json !== "object") {
-            return res.status(400).json({ error: "Send {json: <service account object>}" });
-        }
-
-        const drive = require("./lib/drive");
-        await drive.saveServiceAccount(json);
-
-        res.json({ success: true, client_email: json.client_email });
-
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
-});
-
-app.delete("/settings/google-sa", requireMongo, async (req, res) => {
-
-    try {
-        const drive = require("./lib/drive");
-        await drive.clearServiceAccount();
-        res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-/* ============================================================
-   GOOGLE OAUTH — 3 routes:
-
-     GET  /oauth/google/start     → redirects user to Google consent
-     GET  /oauth/google/callback  → Google redirects here with ?code=…
-     DELETE /oauth/google         → disconnects (forgets refresh token)
-============================================================ */
-
-function buildOAuthRedirectUri(req) {
-    // Use HTTPS if the request came in via HTTPS, otherwise HTTP for local dev
-    const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
-    const host  = req.headers["x-forwarded-host"]  || req.headers.host;
-    return `${proto}://${host}/oauth/google/callback`;
-}
-
-app.get("/oauth/google/start", (req, res) => {
-
-    try {
-        const drive       = require("./lib/drive");
-        const redirectUri = buildOAuthRedirectUri(req);
-        const url         = drive.buildAuthUrl(redirectUri);
-
-        console.log("[oauth] starting flow, redirect_uri =", redirectUri);
-
-        res.redirect(url);
-
-    } catch (err) {
-        console.log("[oauth] start error:", err.message);
-        res.status(500).send(`
-            <h2>OAuth setup error</h2>
-            <p>${err.message}</p>
-            <p>Make sure GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are set in env.</p>
-        `);
-    }
-});
-
-app.get("/oauth/google/callback", requireMongo, async (req, res) => {
-
-    try {
-
-        const { code, error } = req.query;
-
-        if (error) {
-            return res.status(400).send(`
-                <h2>OAuth canceled</h2>
-                <p>Google returned: <code>${error}</code></p>
-                <p><a href="/dashboard.html">← back to dashboard</a></p>
-            `);
-        }
-
-        if (!code) {
-            return res.status(400).send(`
-                <h2>Missing ?code in callback</h2>
-                <p><a href="/dashboard.html">← back to dashboard</a></p>
-            `);
-        }
-
-        const drive       = require("./lib/drive");
-        const redirectUri = buildOAuthRedirectUri(req);
-        const tokens      = await drive.exchangeCodeForTokens(code, redirectUri);
-
-        if (!tokens.refresh_token) {
-            return res.status(400).send(`
-                <h2>No refresh_token returned by Google</h2>
-                <p>This usually means you've previously authorized this app. Go to
-                   <a href="https://myaccount.google.com/permissions" target="_blank">
-                   myaccount.google.com/permissions</a>, remove the app, then try again.</p>
-                <p><a href="/dashboard.html">← back to dashboard</a></p>
-            `);
-        }
-
-        // Get the user's email so we can show it in the dashboard
-        let email = "(unknown)";
-        try {
-            const userInfo = await axios.get(
-                "https://www.googleapis.com/oauth2/v2/userinfo",
-                {
-                    headers: { Authorization: "Bearer " + tokens.access_token },
-                    timeout: 15_000
-                }
-            );
-            email = userInfo.data?.email || email;
-        } catch (e) {
-            console.log("[oauth] could not fetch user email:", e.message);
-        }
-
-        await drive.saveOAuthCreds({
-            refresh_token: tokens.refresh_token,
-            scope:         tokens.scope,
-            email:         email,
-            connected_at:  new Date().toISOString()
-        });
-
-        console.log(`[oauth] connected ${email}`);
-
-        broadcast("log", {
-            level:   "ok",
-            message: `Google Drive OAuth connected: ${email}`,
-            at:      new Date().toISOString()
-        });
-
-        res.send(`
-            <html>
-            <head><title>Connected</title></head>
-            <body style="font-family: system-ui; padding: 40px; max-width: 600px;
-                         background: #0a0a0a; color: #eee;">
-                <h2 style="color: #7eff7e;">✅ Google Drive connected</h2>
-                <p>Signed in as <strong>${email}</strong></p>
-                <p>All Drive uploads will now go to your account using your storage quota.</p>
-                <p style="margin-top: 30px;">
-                    <a href="/dashboard.html" style="color: #7eaaff; text-decoration: none;
-                       padding: 10px 20px; background: #1d2435; border: 1px solid #2c3a52;
-                       border-radius: 6px;">← Back to dashboard</a>
-                </p>
-            </body>
-            </html>
-        `);
-
-    } catch (err) {
-        const detail = err.response?.data || err.message;
-        console.log("[oauth] callback error:", detail);
-        res.status(500).send(`
-            <h2>OAuth callback error</h2>
-            <pre>${JSON.stringify(detail, null, 2)}</pre>
-            <p><a href="/dashboard.html">← back to dashboard</a></p>
-        `);
-    }
-});
-
-app.delete("/oauth/google", requireMongo, async (req, res) => {
-
-    try {
-        const drive = require("./lib/drive");
-        await drive.clearOAuthCreds();
-        res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-/* ============================================================
-   WEEKLY BATCH — generate + approve
-============================================================ */
-
-app.post("/weekly-gen/:client", requireMongo, async (req, res) => {
-
-    try {
-
-        const weeklyBatch = require("./lib/weeklyBatch");
-        const result = await weeklyBatch.generateWeek(req.params.client);
-
-        broadcast("weekly-gen-started", {
-            client: req.params.client,
-            count:  result.queued.filter(q => q.status === "queued").length
-        });
-
-        res.json({ success: true, ...result });
-
-    } catch (err) {
-        console.log("/weekly-gen error:", err.message);
-        res.status(400).json({ error: err.message });
-    }
-});
-
-/* POST /regenerate-asset/:assetId — re-queue a single Drive
-   asset. When the new image arrives, the old Drive file is
-   deleted and replaced with the new one (same filename). */
-
-app.post("/regenerate-asset/:assetId", requireMongo, async (req, res) => {
-
-    try {
-
-        const weeklyBatch = require("./lib/weeklyBatch");
-        const result = await weeklyBatch.regenerateAsset(req.params.assetId);
-
-        broadcast("weekly-regenerate-queued", {
-            assetId: req.params.assetId
-        });
-
-        res.json({ success: true, ...result });
-
-    } catch (err) {
-        console.log("/regenerate-asset error:", err.message);
-        res.status(400).json({ error: err.message });
-    }
-});
-
-/* POST /push-to-drive/:assetId — re-upload an asset that already
-   has a generated image (cloudinaryUrl) but isn't in Drive yet.
-   Used for failed uploads and for queued items whose image already
-   exists. No regeneration — pushes the existing bytes straight up. */
-
-app.post("/push-to-drive/:assetId", requireMongo, async (req, res) => {
-
-    try {
-
-        const weeklyBatch = require("./lib/weeklyBatch");
-        const result = await weeklyBatch.pushToDrive(req.params.assetId);
-
-        broadcast("weekly-uploaded", {
-            client:    result.client || "",
-            status:    "in-drive",
-            driveLink: result.driveLink || ""
-        });
-
-        res.json({ success: true, ...result });
-
-    } catch (err) {
-        console.log("/push-to-drive error:", err.message);
-        res.status(400).json({ success: false, error: err.message });
-    }
-});
-
-/* POST /cron/weekly-all — admin-guarded (curl / CLI use). */
-
-app.post("/cron/weekly-all", requireAdmin, requireMongo, async (req, res) => {
-
-    try {
-        const summary = await runWeeklyAllBatch("manual");
-        res.json({ success: true, ...summary });
-    } catch (err) {
-        console.log("/cron/weekly-all error:", err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-/* POST /weekly-gen-all — same batch, public (matches the existing
-   public /weekly-gen/:client). Used by the dashboard button. */
-
-app.post("/weekly-gen-all", requireMongo, async (req, res) => {
-
-    try {
-        const summary = await runWeeklyAllBatch("manual-dashboard");
-        res.json({ success: true, ...summary });
-    } catch (err) {
-        console.log("/weekly-gen-all error:", err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-/* DELETE /weekly-gen/:client — clear the queue for one client.
-   Removes:
-     - All ungenerated Prompts for this client (Tampermonkey won't pick up)
-     - All DriveAssets with status "queued" or "failed"
-   Drive files already uploaded ("in-drive" status) are NOT touched.
-*/
-
-app.delete("/weekly-gen/:client", requireMongo, async (req, res) => {
-
-    try {
-
-        const clientName = req.params.client;
-
-        // 1. Find DriveAssets to delete (queued + failed)
-        const assets = await DriveAsset.find({
-            client: clientName,
-            status: { $in: ["queued", "failed"] }
-        }).lean();
-
-        const promptIds = assets.map(a => a.promptId).filter(Boolean);
-
-        // 2. Delete the matching Prompt records (un-generated ones)
-        let promptsDeleted = 0;
-        if (promptIds.length) {
-            const r = await Prompt.deleteMany({
-                _legacyId: { $in: promptIds },
-                generated: false
-            });
-            promptsDeleted = r.deletedCount || 0;
-        }
-
-        // 3. Also catch any orphan prompts from weekly-batch (no matching asset)
-        const r2 = await Prompt.deleteMany({
-            client: clientName,
-            source: { $in: ["weekly-batch", "weekly-batch-regenerate"] },
-            generated: false
-        });
-        promptsDeleted += r2.deletedCount || 0;
-
-        // 4. Delete the DriveAsset records
-        const r3 = await DriveAsset.deleteMany({
-            client: clientName,
-            status: { $in: ["queued", "failed"] }
-        });
-
-        const assetsDeleted = r3.deletedCount || 0;
-
-        console.log(
-            `[clear-week] ${clientName}: removed ${promptsDeleted} prompt(s) ` +
-            `+ ${assetsDeleted} asset(s)`
-        );
-
-        broadcast("weekly-cleared", {
-            client:          clientName,
-            promptsDeleted,
-            assetsDeleted
-        });
-
-        res.json({
-            success:        true,
-            promptsDeleted,
-            assetsDeleted
-        });
-
-    } catch (err) {
-        console.log("/weekly-gen DELETE error:", err.message);
-        res.status(400).json({ error: err.message });
-    }
-});
-
-app.get("/drive-assets/:client", requireMongo, async (req, res) => {
-
-    try {
-
-        const { DriveAsset } = require("./db/models");
-        const items = await DriveAsset.find({ client: req.params.client })
-            .sort({ calendarDate: 1 })
-            .limit(50)
-            .lean();
-        res.json({ items });
-
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-/* GET /drive-folder/:client — list the LIVE state of the client's Drive
-   folder so the dashboard can show what's currently in there. */
-
-app.get("/drive-folder/:client", requireMongo, async (req, res) => {
-
-    try {
-
-        const { Client } = require("./db/models");
-        const drive = require("./lib/drive");
-
-        const client = await Client.findOne({ name: req.params.client }).lean();
-        if (!client) return res.status(404).json({ error: "Client not found" });
-
-        const folderId = drive.extractFolderId(client.driveFolderUrl || "");
-        if (!folderId) return res.json({ folderId: null, files: [] });
-
-        if (!await drive.isConfigured()) {
-            return res.status(400).json({ error: "Google Service Account not configured" });
-        }
-
-        const files = await drive.listFiles(folderId);
-        res.json({ folderId, files });
-
-    } catch (err) {
-        console.log("/drive-folder error:", err.message);
-        res.status(500).json({ error: err.message });
-    }
-});
 
 app.get("/calendar/:client", async (req, res) => {
 
@@ -2117,8 +1753,6 @@ app.get("/calendar/:client", async (req, res) => {
 
 /* ============================================================
    GET /calendar/:client/export.xlsx
-   Stream an .xlsx file with the calendar so the user can edit
-   it in Excel. Columns: Date · Day · Event · Topic · Goal · Done.
 ============================================================ */
 
 app.get("/calendar/:client/export.xlsx", async (req, res) => {
@@ -2146,7 +1780,6 @@ app.get("/calendar/:client/export.xlsx", async (req, res) => {
             { header: "Done",  key: "done",  width: 8 }
         ];
 
-        // Style the header row
         ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
         ws.getRow(1).fill = {
             type:    "pattern",
@@ -2176,7 +1809,6 @@ app.get("/calendar/:client/export.xlsx", async (req, res) => {
             });
         });
 
-        // Set content disposition headers
         const safeName = client.replace(/[^a-z0-9_-]/gi, "_");
         const filename = `calendar-${safeName}-${new Date().toISOString().slice(0,10)}.xlsx`;
 
@@ -2201,15 +1833,12 @@ app.get("/calendar/:client/export.xlsx", async (req, res) => {
 
 /* ============================================================
    POST /calendar/:client/import
-   Body: multipart form-data with field "file" = .xlsx
-   Parses the workbook (first sheet), validates rows, replaces
-   the saved calendar for that client.
 ============================================================ */
 
 const multer = require("multer");
 const xlsxUpload = multer({
     storage: multer.memoryStorage(),
-    limits:  { fileSize: 10 * 1024 * 1024 }   // 10 MB
+    limits:  { fileSize: 10 * 1024 * 1024 }
 });
 
 app.post("/calendar/:client/import",
@@ -2233,10 +1862,6 @@ app.post("/calendar/:client/import",
             const ws = wb.worksheets[0];
             if (!ws) return res.status(400).json({ error: "Workbook has no sheets" });
 
-            /* Find the header row + column indices so users can
-               reorder columns or rename them slightly. We accept
-               case-insensitive matches. */
-
             const headerRow = ws.getRow(1);
             const colByName = {};
 
@@ -2253,8 +1878,7 @@ app.post("/calendar/:client/import",
 
             if (!colDate || !colTopic) {
                 return res.status(400).json({
-                    error: "Sheet must have at least 'Date' and 'Topic' columns " +
-                           "(case-insensitive header row 1)."
+                    error: "Sheet must have at least 'Date' and 'Topic' columns"
                 });
             }
 
@@ -2263,23 +1887,18 @@ app.post("/calendar/:client/import",
 
             ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
 
-                if (rowNumber === 1) return; // skip header
-
-                /* Extract date — Excel may give us a Date object or
-                   a string. Normalize to YYYY-MM-DD. */
+                if (rowNumber === 1) return;
 
                 let rawDate = row.getCell(colDate).value;
                 let dateStr = "";
 
                 if (rawDate instanceof Date) {
-                    // Use local components to avoid TZ shift surprises
                     const y  = rawDate.getFullYear();
                     const m  = String(rawDate.getMonth() + 1).padStart(2, "0");
                     const dd = String(rawDate.getDate()).padStart(2, "0");
                     dateStr = `${y}-${m}-${dd}`;
                 } else if (typeof rawDate === "string") {
                     const trimmed = rawDate.trim();
-                    // Accept YYYY-MM-DD or D/M/YYYY or M/D/YYYY
                     const iso = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
                     if (iso) {
                         dateStr = `${iso[1]}-${iso[2].padStart(2,"0")}-${iso[3].padStart(2,"0")}`;
@@ -2293,7 +1912,6 @@ app.post("/calendar/:client/import",
                         }
                     }
                 } else if (rawDate && typeof rawDate === "object" && rawDate.text) {
-                    // Hyperlink/formula cell
                     dateStr = String(rawDate.text).trim();
                 }
 
@@ -2318,7 +1936,7 @@ app.post("/calendar/:client/import",
 
             if (!calendar.length) {
                 return res.status(400).json({
-                    error: "No valid rows found. Make sure rows have a Date and a Topic.",
+                    error: "No valid rows found",
                     issues
                 });
             }
@@ -2326,8 +1944,7 @@ app.post("/calendar/:client/import",
             await schedulerCalendar.saveCalendar(client, calendar);
 
             console.log(
-                `📥 Imported calendar for "${client}" — ${calendar.length} rows ` +
-                `(${issues.length} skipped)`
+                `📥 Imported calendar for "${client}" — ${calendar.length} rows`
             );
 
             res.json({
@@ -2346,23 +1963,13 @@ app.post("/calendar/:client/import",
 );
 
 /* ============================================================
-   /save  — backward compatibility (Tampermonkey old version)
+   /save  — backward compatibility
 ============================================================ */
 
 app.post("/save", requireMongo, handleSavePost);
 
 /* ============================================================
-   WEEKLY-ALL BATCH RUNNER + SATURDAY SCHEDULER
-
-   runWeeklyAllBatch(trigger) loops every client and queues their
-   upcoming week, logs a RunLog, and broadcasts progress to the
-   dashboard. It's called by:
-     - the Saturday cron (automatic)
-     - POST /cron/weekly-all (manual, admin)
-     - the boot catch-up check (if a Saturday was missed)
-
-   A RunLog of type "weekly-all" records the last run so the
-   catch-up logic knows whether this week's batch already ran.
+   WEEKLY-ALL BATCH RUNNER
 ============================================================ */
 
 let weeklyAllRunning = false;
@@ -2423,9 +2030,6 @@ async function runWeeklyAllBatch(trigger = "cron") {
     }
 }
 
-/* Has this week's Saturday batch already run? Compares the last
-   "weekly-all" RunLog against the current week start (Monday). */
-
 async function weeklyAllRanThisWeek() {
 
     const last = await RunLog.findOne({ type: "weekly-all" })
@@ -2433,10 +2037,9 @@ async function weeklyAllRanThisWeek() {
 
     if (!last) return false;
 
-    // Week start (Monday 00:00) in server-local time
     const now = new Date();
-    const day = now.getDay();                 // 0 Sun … 6 Sat
-    const diff = day === 0 ? -6 : 1 - day;    // back to Monday
+    const day = now.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
     const monday = new Date(now);
     monday.setDate(now.getDate() + diff);
     monday.setHours(0, 0, 0, 0);
@@ -2444,18 +2047,9 @@ async function weeklyAllRanThisWeek() {
     return new Date(last.runAt) >= monday;
 }
 
-/* Start the Saturday cron + a boot-time catch-up.
-
-   - Schedule: env WEEKLY_CRON (node-cron syntax) or default
-     "30 3 * * 6" = Saturday 03:30 UTC = Saturday 09:00 IST.
-   - Timezone: env CRON_TZ or default "Asia/Kolkata".
-   - Catch-up: on boot, if today is Saturday (or later in the week)
-     and this week's batch hasn't run yet, run it ~1 min after boot.
-     This covers Render's free tier sleeping through the cron fire. */
-
 function startWeeklyScheduler() {
 
-    const schedule = process.env.WEEKLY_CRON || "30 3 * * 6";  // Sat 09:00 IST
+    const schedule = process.env.WEEKLY_CRON || "30 3 * * 6";
     const tz       = process.env.CRON_TZ     || "Asia/Kolkata";
 
     if (!cron.validate(schedule)) {
@@ -2471,13 +2065,11 @@ function startWeeklyScheduler() {
 
     console.log(`🗓  Weekly auto-batch scheduled: "${schedule}" (${tz}).`);
 
-    // ── Catch-up: if we're already at/after Saturday this week and the
-    //    batch hasn't run, fire it shortly after boot. ──
     setTimeout(async () => {
         try {
             if (mongoose.connection.readyState !== 1) return;
 
-            const day = new Date().getDay(); // 0 Sun … 6 Sat
+            const day = new Date().getDay();
             const atOrAfterSaturday = day === 6 || day === 0;
 
             if (atOrAfterSaturday && !(await weeklyAllRanThisWeek())) {
@@ -2490,19 +2082,365 @@ function startWeeklyScheduler() {
     }, 60_000);
 }
 
+/* ============================================================
+   REMAINING ENDPOINTS (weekly gen, drive management, etc.)
+   — Kept intact from original server.js
+============================================================ */
 
+app.post("/weekly-gen/:client", requireMongo, async (req, res) => {
+    try {
+        const weeklyBatch = require("./lib/weeklyBatch");
+        const result = await weeklyBatch.generateWeek(req.params.client);
+
+        broadcast("weekly-gen-started", {
+            client: req.params.client,
+            count:  result.queued.filter(q => q.status === "queued").length
+        });
+
+        res.json({ success: true, ...result });
+
+    } catch (err) {
+        console.log("/weekly-gen error:", err.message);
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.post("/regenerate-asset/:assetId", requireMongo, async (req, res) => {
+    try {
+        const weeklyBatch = require("./lib/weeklyBatch");
+        const result = await weeklyBatch.regenerateAsset(req.params.assetId);
+
+        broadcast("weekly-regenerate-queued", {
+            assetId: req.params.assetId
+        });
+
+        res.json({ success: true, ...result });
+
+    } catch (err) {
+        console.log("/regenerate-asset error:", err.message);
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.post("/push-to-drive/:assetId", requireMongo, async (req, res) => {
+    try {
+        const weeklyBatch = require("./lib/weeklyBatch");
+        const result = await weeklyBatch.pushToDrive(req.params.assetId);
+
+        broadcast("weekly-uploaded", {
+            client:    result.client || "",
+            status:    "in-drive",
+            driveLink: result.driveLink || ""
+        });
+
+        res.json({ success: true, ...result });
+
+    } catch (err) {
+        console.log("/push-to-drive error:", err.message);
+        res.status(400).json({ success: false, error: err.message });
+    }
+});
+
+app.post("/cron/weekly-all", requireAdmin, requireMongo, async (req, res) => {
+    try {
+        const summary = await runWeeklyAllBatch("manual");
+        res.json({ success: true, ...summary });
+    } catch (err) {
+        console.log("/cron/weekly-all error:", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.post("/weekly-gen-all", requireMongo, async (req, res) => {
+    try {
+        const summary = await runWeeklyAllBatch("manual-dashboard");
+        res.json({ success: true, ...summary });
+    } catch (err) {
+        console.log("/weekly-gen-all error:", err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.delete("/weekly-gen/:client", requireMongo, async (req, res) => {
+    try {
+        const clientName = req.params.client;
+        const assets = await DriveAsset.find({
+            client: clientName,
+            status: { $in: ["queued", "failed"] }
+        }).lean();
+
+        const promptIds = assets.map(a => a.promptId).filter(Boolean);
+
+        let promptsDeleted = 0;
+        if (promptIds.length) {
+            const r = await Prompt.deleteMany({
+                _legacyId: { $in: promptIds },
+                generated: false
+            });
+            promptsDeleted = r.deletedCount || 0;
+        }
+
+        const r2 = await Prompt.deleteMany({
+            client: clientName,
+            source: { $in: ["weekly-batch", "weekly-batch-regenerate"] },
+            generated: false
+        });
+        promptsDeleted += r2.deletedCount || 0;
+
+        const r3 = await DriveAsset.deleteMany({
+            client: clientName,
+            status: { $in: ["queued", "failed"] }
+        });
+
+        const assetsDeleted = r3.deletedCount || 0;
+
+        console.log(
+            `[clear-week] ${clientName}: removed ${promptsDeleted} prompt(s) ` +
+            `+ ${assetsDeleted} asset(s)`
+        );
+
+        broadcast("weekly-cleared", {
+            client:          clientName,
+            promptsDeleted,
+            assetsDeleted
+        });
+
+        res.json({
+            success:        true,
+            promptsDeleted,
+            assetsDeleted
+        });
+
+    } catch (err) {
+        console.log("/weekly-gen DELETE error:", err.message);
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.get("/drive-assets/:client", requireMongo, async (req, res) => {
+    try {
+        const { DriveAsset } = require("./db/models");
+        const items = await DriveAsset.find({ client: req.params.client })
+            .sort({ calendarDate: 1 })
+            .limit(50)
+            .lean();
+        res.json({ items });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get("/drive-folder/:client", requireMongo, async (req, res) => {
+    try {
+        const { Client } = require("./db/models");
+        const drive = require("./lib/drive");
+
+        const client = await Client.findOne({ name: req.params.client }).lean();
+        if (!client) return res.status(404).json({ error: "Client not found" });
+
+        const folderId = drive.extractFolderId(client.driveFolderUrl || "");
+        if (!folderId) return res.json({ folderId: null, files: [] });
+
+        if (!await drive.isConfigured()) {
+            return res.status(400).json({ error: "Google Service Account not configured" });
+        }
+
+        const files = await drive.listFiles(folderId);
+        res.json({ folderId, files });
+
+    } catch (err) {
+        console.log("/drive-folder error:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   GOOGLE OAuth and settings endpoints
+============================================================ */
+
+function buildOAuthRedirectUri(req) {
+    const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const host  = req.headers["x-forwarded-host"]  || req.headers.host;
+    return `${proto}://${host}/oauth/google/callback`;
+}
+
+app.get("/settings/google-sa", requireMongo, async (req, res) => {
+    try {
+        const drive = require("./lib/drive");
+        const info  = await drive.getAuthInfo();
+
+        res.json({
+            configured:   info.mode !== "none",
+            mode:         info.mode,
+            client_email: info.email,
+            email:        info.email
+        });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post("/settings/google-sa", requireMongo, async (req, res) => {
+    try {
+        const json = req.body?.json;
+        if (!json || typeof json !== "object") {
+            return res.status(400).json({ error: "Send {json: <service account object>}" });
+        }
+
+        const drive = require("./lib/drive");
+        await drive.saveServiceAccount(json);
+
+        res.json({ success: true, client_email: json.client_email });
+
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.delete("/settings/google-sa", requireMongo, async (req, res) => {
+    try {
+        const drive = require("./lib/drive");
+        await drive.clearServiceAccount();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get("/oauth/google/start", (req, res) => {
+    try {
+        const drive       = require("./lib/drive");
+        const redirectUri = buildOAuthRedirectUri(req);
+        const url         = drive.buildAuthUrl(redirectUri);
+
+        console.log("[oauth] starting flow, redirect_uri =", redirectUri);
+
+        res.redirect(url);
+
+    } catch (err) {
+        console.log("[oauth] start error:", err.message);
+        res.status(500).send(`
+            <h2>OAuth setup error</h2>
+            <p>${err.message}</p>
+            <p>Make sure GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are set in env.</p>
+        `);
+    }
+});
+
+app.get("/oauth/google/callback", requireMongo, async (req, res) => {
+    try {
+        const { code, error } = req.query;
+
+        if (error) {
+            return res.status(400).send(`
+                <h2>OAuth canceled</h2>
+                <p>Google returned: <code>${error}</code></p>
+                <p><a href="/dashboard.html">← back to dashboard</a></p>
+            `);
+        }
+
+        if (!code) {
+            return res.status(400).send(`
+                <h2>Missing ?code in callback</h2>
+                <p><a href="/dashboard.html">← back to dashboard</a></p>
+            `);
+        }
+
+        const drive       = require("./lib/drive");
+        const redirectUri = buildOAuthRedirectUri(req);
+        const tokens      = await drive.exchangeCodeForTokens(code, redirectUri);
+
+        if (!tokens.refresh_token) {
+            return res.status(400).send(`
+                <h2>No refresh_token returned by Google</h2>
+                <p>This usually means you've previously authorized this app. Go to
+                   <a href="https://myaccount.google.com/permissions" target="_blank">
+                   myaccount.google.com/permissions</a>, remove the app, then try again.</p>
+                <p><a href="/dashboard.html">← back to dashboard</a></p>
+            `);
+        }
+
+        let email = "(unknown)";
+        try {
+            const userInfo = await axios.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                {
+                    headers: { Authorization: "Bearer " + tokens.access_token },
+                    timeout: 15_000
+                }
+            );
+            email = userInfo.data?.email || email;
+        } catch (e) {
+            console.log("[oauth] could not fetch user email:", e.message);
+        }
+
+        await drive.saveOAuthCreds({
+            refresh_token: tokens.refresh_token,
+            scope:         tokens.scope,
+            email:         email,
+            connected_at:  new Date().toISOString()
+        });
+
+        console.log(`[oauth] connected ${email}`);
+
+        broadcast("log", {
+            level:   "ok",
+            message: `Google Drive OAuth connected: ${email}`,
+            at:      new Date().toISOString()
+        });
+
+        res.send(`
+            <html>
+            <head><title>Connected</title></head>
+            <body style="font-family: system-ui; padding: 40px; max-width: 600px;
+                         background: #0a0a0a; color: #eee;">
+                <h2 style="color: #7eff7e;">✅ Google Drive connected</h2>
+                <p>Signed in as <strong>${email}</strong></p>
+                <p>All Drive uploads will now go to your account using your storage quota.</p>
+                <p style="margin-top: 30px;">
+                    <a href="/dashboard.html" style="color: #7eaaff; text-decoration: none;
+                       padding: 10px 20px; background: #1d2435; border: 1px solid #2c3a52;
+                       border-radius: 6px;">← Back to dashboard</a>
+                </p>
+            </body>
+            </html>
+        `);
+
+    } catch (err) {
+        const detail = err.response?.data || err.message;
+        console.log("[oauth] callback error:", detail);
+        res.status(500).send(`
+            <h2>OAuth callback error</h2>
+            <pre>${JSON.stringify(detail, null, 2)}</pre>
+            <p><a href="/dashboard.html">← back to dashboard</a></p>
+        `);
+    }
+});
+
+app.delete("/oauth/google", requireMongo, async (req, res) => {
+    try {
+        const drive = require("./lib/drive");
+        await drive.clearOAuthCreds();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ============================================================
+   STARTUP & BOOT
+============================================================ */
 
 (async function boot() {
 
     try {
 
         await connect();
-        console.log("ℹ Image generation only — scheduling handled by MetaFlow.");
+        console.log("ℹ Image generation with Groq calendar support enabled.");
 
-        // ── Startup health checks (non-blocking) ──
         setTimeout(runStartupChecks, 3000);
-
-        // ── Weekly auto-batch scheduler (Saturday) ──
         startWeeklyScheduler();
 
     } catch (err) {
@@ -2516,24 +2454,17 @@ function startWeeklyScheduler() {
         `\n🚀 Server running on http://localhost:${PORT}\n` +
         `   Dashboard:  http://localhost:${PORT}/dashboard.html\n` +
         `   SSE stream: http://localhost:${PORT}/events\n` +
-        `   Health:     http://localhost:${PORT}/health\n`
+        `   Health:     http://localhost:${PORT}/health\n` +
+        `   Calendar:   http://localhost:${PORT}/api/health/calendar\n`
     ));
 
 })();
-
-/* ============================================================
-   STARTUP HEALTH CHECKS
-   1. Was yesterday's cron skipped? (PC was off / power cut)
-   2. Are the ChatGPT cookies still valid?
-============================================================ */
 
 async function runStartupChecks() {
 
     if (mongoose.connection.readyState !== 1) return;
 
     console.log("\n🩺 Running startup health checks…");
-
-    /* ---------- 1. Did we miss yesterday's cron? ---------- */
 
     try {
 
@@ -2571,9 +2502,7 @@ async function runStartupChecks() {
             } else {
 
                 console.log(
-                    `   ⚠  Last cron was ${daysSince} days ago — possible missed run(s).\n` +
-                    "       Hit \"🌅 Generate & Schedule for ALL Clients\" on the\n" +
-                    "       dashboard to catch up if needed."
+                    `   ⚠  Last cron was ${daysSince} days ago — possible missed run(s).`
                 );
 
                 broadcast("pipeline-done", {
@@ -2590,8 +2519,6 @@ async function runStartupChecks() {
 
         console.log("   missed-day check failed:", err.message);
     }
-
-    /* ---------- 2. Check ChatGPT cookies (engine=puppeteer) ---------- */
 
     if ((process.env.IMAGE_ENGINE || "").toLowerCase() !== "puppeteer") {
 
@@ -2623,8 +2550,7 @@ async function runStartupChecks() {
         if (ageDays >= 14) {
 
             console.log(
-                `   ⚠  ChatGPT cookies are ${ageDays} days old — may expire soon.\n` +
-                "       Re-export from Cookie-Editor + re-upload to be safe."
+                `   ⚠  ChatGPT cookies are ${ageDays} days old — may expire soon.`
             );
 
         } else {
